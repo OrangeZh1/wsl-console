@@ -44,9 +44,9 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   for(const device of devices)if(reserved.has(device.id))device.workload='executing';
   const entries=await readdir(queueRoot,{withFileTypes:true});
   for(const entry of entries){
-   if(!entry.isDirectory()||!/^[-a-z0-9_]{1,80}$/i.test(entry.name)||inFlight.has(entry.name))continue;
+   if(!entry.isDirectory()||!/^[a-z0-9][a-z0-9_-]{0,79}$/i.test(entry.name)||inFlight.has(entry.name))continue;
    const directory=join(queueRoot,entry.name);let job;try{job=JSON.parse(await readFile(join(directory,'job.json'),'utf8'))}catch{continue}
-   if(job.approved!==true||job.status!=='queued'||job.recoveryRequired)continue;
+   if(job.approved!==true||job.status!=='queued'||job.recoveryRequired||job.executionRoute==='github-actions')continue;
    const choice=chooseExecutionDevice(job,devices,{now:Date.now()});
    if(choice.route==='device'){reserved.add(choice.deviceId);const device=devices.find(item=>item.id===choice.deviceId);if(device)device.workload='executing';}
    const running=dispatchQueuedJob(queueRoot,entry.name,devices.map(device=>device.id===choice.deviceId?{...device,workload:'idle'}:device),(current,device)=>executePreparedJob(current,device,directory),{now:Date.now()}).then(result=>console.log(JSON.stringify({job:entry.name,result}))).catch(error=>{console.error(JSON.stringify({job:entry.name,error:error.message}))}).finally(()=>{inFlight.delete(entry.name);if(choice.deviceId)reserved.delete(choice.deviceId)});
