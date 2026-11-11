@@ -3,7 +3,7 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {readAssetSnapshot,backendVersion} from '../identity.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
-const commit=process.env.GITHUB_SHA||execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
+const commit=process.env.WSL_CONSOLE_SOURCE_COMMIT||process.env.GITHUB_SHA||execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
 if(!/^[a-f0-9]{40,64}$/i.test(commit))throw Error('BUILD_COMMIT_INVALID');
 const assets=await readAssetSnapshot(root),manifest={schema:'wsl-console-build-v1',commit,backendVersion:await backendVersion(root),assetsVersion:assets.version,builtAt:new Date().toISOString()};
 await writeFile(new URL('../build-manifest.json',import.meta.url),JSON.stringify(manifest,null,2)+'\n');
