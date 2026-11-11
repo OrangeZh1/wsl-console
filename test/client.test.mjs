@@ -293,6 +293,10 @@ test('run failure details name actual failed stages even while a successful stag
  c.element('failure-content').children[0].children.at(-1).handlers.click();assert.equal(c.element('step-name').textContent,'原生包检查');assert.equal(c.call('run.id'),'fail-a');
 });
 
+test('specific failure evidence leads the summary and absent test statistics stay unknown',async()=>{
+ const c=await client(),a=record('specific-failure','failed',[{id:'flow',label:'汇总',status:'failed'},{id:'command',label:'实际命令',status:'failed',command:['verify'],exitCode:1}]);c.answer(c.requests[0],{runs:[a]});await turn();assert.equal(c.element('test-count').textContent,'尚未上报测试统计');const req=c.requests.find(request=>request.path.endsWith('/failure'));c.answer(req,{failures:[{stepId:'flow',label:'汇总',source:'missing',message:'未提供具体原因'},{stepId:'command',label:'实际命令',source:'log',message:'page.screenshot: Timeout 30000ms exceeded.'}]});await turn();assert.match(c.element('failure-summary').textContent,/page.screenshot/);assert.match(c.element('failure-content').children[0].textContent,/page.screenshot/);
+});
+
 test('delayed failure responses cannot cross runs or empty filters and missing information stays explicit',async()=>{
  const a=record('fail-a','failed'),b=record('fail-b','failed',[]),c=await client();c.answer(c.requests[0],{runs:[a,b]});await turn();c.call("chooseRun('fail-a')");const first=c.requests.find(request=>request.path==='/api/runs/fail-a/failure');c.call("chooseRun('fail-b')");const second=c.requests.find(request=>request.path==='/api/runs/fail-b/failure');assert.equal(c.element('failure-summary').attributes.title,'');
  c.answer(first,{failures:[{stepId:'unit',label:'A 错误阶段',message:'OLD_A_REASON',source:'reported'}]});await turn();assert.doesNotMatch(c.element('failure-content').textContent,/OLD_A_REASON/);c.answer(second,{failures:[{stepId:null,label:'这次运行',message:'执行端未上报具体失败原因',source:'missing'}]});await turn();assert.match(c.element('failure-content').textContent,/未上报具体失败原因/);assert.doesNotMatch(c.element('failure-content').textContent,/查看失败阶段日志/);

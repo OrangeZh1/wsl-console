@@ -379,6 +379,7 @@ main {
 .run-disclosures > details[open] > summary { border-color: var(--line); background: #edf1f6; }
 .run-disclosures > .failure > summary { color: var(--danger); }
 #activity-summary, #failure-summary { color: var(--muted); font-size: 10px; }
+#failure-summary { max-width: min(45vw, 440px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-disclosures :is(.activity-content, .failure-content, .source-content) { grid-column: 1 / -1; grid-row: 2; min-width: 0; max-height: 120px; overflow: auto; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .run-disclosures > details:not([open]) > :is(.activity-content, .failure-content, .source-content) { display: none; }
 .run-disclosures .failure-content { border-color: #ead7dc; }

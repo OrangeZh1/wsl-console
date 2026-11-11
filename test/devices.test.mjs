@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {sameDevice,deviceRunState,readDevices,normalizeDeviceResources} from '../devices.mjs';
 import {probeArguments,sampleDevice} from '../watch-devices.mjs';
+import {createClockObserver} from '../clock-observation.mjs';
 
 test('device identities reject generic hostnames and contradictory physical computer names',()=>{
  assert.equal(sameDevice({hostname:'localhost'},{hostname:'localhost'}),false);
@@ -34,11 +35,15 @@ test('fresh online probes and failed/stale probes keep assignment distinct from 
  const root=await mkdtemp(join(tmpdir(),'wsl-devices-data-'));t.after(()=>rm(root,{recursive:true,force:true}));
  const now=Date.now(),date=offset=>new Date(now+offset).toISOString(),devices=[{id:'a',name:'本机',computerName:'A',transport:'local'},{id:'b',name:'远程',computerName:'B',transport:'ssh'}],runs=[{id:'work',name:'远程任务',executor:{computerName:'B'},status:'running',updatedAt:date(0),steps:[{status:'running',command:['python3']}]},{id:'old',name:'旧任务',status:'running',updatedAt:date(0),steps:[]}];
  await writeFile(join(root,'b.json'),JSON.stringify({format:'wsl-device-v1',id:'b',connection:'reachable',checkedAt:date(0),lastSeenAt:date(0),host:{computerName:'B',token:'secret'}}));
- const config={runsRoot:join(root,'runs'),devicesRoot:root,devices};let result=await readDevices(config,{runs,viewerHost:{computerName:'A'},now});
- assert.equal(result.devices.length,2);assert.equal(result.devices[0].onlineState,'online');assert.equal(result.devices[1].onlineState,'online');assert.equal(result.devices[1].workload,'executing');assert.deepEqual(result.unassignedRuns,['old']);assert.doesNotMatch(JSON.stringify(result),/secret|token/);
- result=await readDevices(config,{runs,now:now+60000});assert.equal(result.devices[1].onlineState,'stale');assert.equal(result.devices[1].runs[0].workState,'unconfirmed');
- await writeFile(join(root,'b.json'),JSON.stringify({format:'wsl-device-v1',id:'b',connection:'unreachable',checkedAt:date(0),lastSeenAt:date(-10000),password:'secret'}));
- result=await readDevices(config,{runs,now});assert.equal(result.devices[1].onlineState,'unreachable');assert.equal(result.devices[1].workload,'unconfirmed');assert.equal(result.devices[1].lastSeenAt,date(-10000));
+ const config={runsRoot:join(root,'runs'),devicesRoot:root,devices},clockObserver=createClockObserver(),read=(at,mono)=>readDevices(config,{runs,viewerHost:{computerName:'A'},now:at,monotonicNow:mono,receiverClock:{},clockObserver});let result=await read(now,0);
+ assert.equal(result.devices.length,2);assert.equal(result.devices[0].onlineState,'online');assert.equal(result.devices[1].onlineState,'unknown');assert.equal(result.devices[1].workload,'unconfirmed');assert.deepEqual(result.unassignedRuns,['old']);assert.doesNotMatch(JSON.stringify(result),/secret|token/);
+ await writeFile(join(root,'b.json'),JSON.stringify({format:'wsl-device-v1',id:'b',connection:'reachable',checkedAt:date(1000),host:{computerName:'B'}}));
+ result=await read(now+1000,1000);assert.equal(result.devices[1].onlineState,'online');assert.equal(result.devices[1].workload,'unconfirmed');
+ runs[0].updatedAt=date(2000);result=await read(now+2000,2000);assert.equal(result.devices[1].workload,'executing');
+ result=await read(now+62000,62000);assert.equal(result.devices[1].onlineState,'stale');assert.equal(result.devices[1].runs[0].workState,'unconfirmed');
+ await writeFile(join(root,'b.json'),JSON.stringify({format:'wsl-device-v1',id:'b',connection:'unreachable',checkedAt:date(63000),lastSeenAt:date(-10000),diagnostic:{kind:'connection',code:'PROBE_CONNECTION_UNREACHABLE'},password:'secret'}));
+ result=await read(now+63000,63000);assert.equal(result.devices[1].onlineState,'unreachable');assert.equal(result.devices[1].workload,'unconfirmed');assert.equal(result.devices[1].controllerLastSeenAt,date(-10000));
+ await writeFile(join(root,'b.json'),JSON.stringify({format:'wsl-device-v1',id:'b',connection:'unreachable',checkedAt:date(64000)}));result=await read(now+64000,64000);assert.equal(result.devices[1].onlineState,'unknown');
 });
 
 test('SSH prober uses pinned keys, ignores secrets and preserves last successful observation',async t=>{

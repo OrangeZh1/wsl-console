@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 
 export const API_VERSION='wsl-console-api-v2';
 export const ASSET_FILES=Object.freeze({'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/favicon.svg':['favicon.svg','image/svg+xml'],'/icons.svg':['icons.svg','image/svg+xml'],'/icons.js':['icons.js','text/javascript; charset=utf-8']});
-export const BACKEND_FILES=Object.freeze(['server.mjs','state.mjs','model.mjs','identity.mjs','record-cache.mjs','host.mjs','devices.mjs','failure.mjs','resources.mjs','retention.mjs']);
+export const BACKEND_FILES=Object.freeze(['server.mjs','state.mjs','model.mjs','identity.mjs','record-cache.mjs','clock-observation.mjs','host.mjs','devices.mjs','failure.mjs','resources.mjs','retention.mjs']);
 const digest=value=>createHash('sha256').update(value).digest('hex');
 const ordered=value=>Array.isArray(value)?value.map(ordered):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,ordered(value[key])])):value;
 export const configVersion=config=>digest(JSON.stringify(ordered(config)));

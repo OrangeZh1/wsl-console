@@ -3,10 +3,12 @@ import {mkdir,readFile,writeFile,rename} from 'node:fs/promises';
 import {basename,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
+import {performance} from 'node:perf_hooks';
 import {windowsProbeScript} from './probe-windows.mjs';
 import {normalizeDeviceResources} from './devices.mjs';
 
 const validId=value=>typeof value==='string'&&/^[a-z0-9][a-z0-9_-]{0,79}$/i.test(value);
+const observerSession=randomUUID(),sequences=new Map();
 
 export function classifyProbeFailure({ssh=false,stderr='',exitCode,timedOut=false,spawnFailed=false,outputLimit=false}={}){
  if(spawnFailed)return {connection:'unknown',diagnostic:{kind:'configuration',code:'PROBE_START_FAILED'}};
@@ -47,14 +49,19 @@ export async function sampleDevice(device,root,probe=command){
  if(!validId(device?.id)||typeof device.computerName!=='string'||!device.computerName.trim())throw Error('DEVICE_DEFINITION_INVALID');
  const file=join(resolve(root),device.id+'.json');let previous;
  try{previous=JSON.parse(await readFile(file,'utf8'))}catch{}
- let heartbeat;
+ let heartbeat;const startedMono=performance.now();
+ const observation=checkedAt=>({sessionId:observerSession,sequence:(sequences.set(device.id,(sequences.get(device.id)||0)+1),sequences.get(device.id)),receivedAt:checkedAt,monotonicMs:performance.now()});
  try{
   const {file:program,args,input}=probeArguments(device);let observed;try{observed=JSON.parse((await probe(program,args,input)).trim())}catch(error){if(error.connection)throw error;throw failure({connection:'unknown',diagnostic:{kind:'protocol',code:'PROBE_PROTOCOL_INVALID'}})}
   if(typeof observed?.computerName!=='string'||observed.computerName.toLowerCase()!==device.computerName.toLowerCase())throw failure({connection:'unknown',diagnostic:{kind:'identity',code:'DEVICE_IDENTITY_MISMATCH'}});
-  const checkedAt=new Date().toISOString(),resources=normalizeDeviceResources(observed.resources),sourceTime=Date.parse(observed.observedAt),clockOffsetMs=Number.isFinite(sourceTime)?sourceTime-Date.parse(checkedAt):0;
-  const rawDiagnostic=observed.resources?.diagnostic,diagnostic=['WSL_PROBE_TIMEOUT','WSL_PROBE_FAILED'].includes(rawDiagnostic?.code)?{kind:'linux-state',code:rawDiagnostic.code}:undefined;
-  heartbeat={format:'wsl-device-v1',id:device.id,connection:'reachable',checkedAt,lastSeenAt:checkedAt,clockOffsetMs,host:{id:device.id,name:device.name||observed.computerName,computerName:observed.computerName,platform:'win32',source:'sampled',observedAt:checkedAt},resources,...(diagnostic?{diagnostic}:{})};
- }catch(error){const checkedAt=new Date().toISOString(),diagnostic=error.diagnostic||{kind:'configuration',code:'DEVICE_PROBE_CONFIGURATION_INVALID'};heartbeat={format:'wsl-device-v1',id:device.id,connection:error.connection==='unreachable'?'unreachable':'unknown',checkedAt,...(previous?.lastSeenAt?{lastSeenAt:previous.lastSeenAt}:{}),...(Number.isFinite(previous?.clockOffsetMs)?{clockOffsetMs:previous.clockOffsetMs}:{}),resources:normalizeDeviceResources(previous?.resources),error:diagnostic.code,diagnostic};}
+  const checkedAt=new Date().toISOString(),resources=normalizeDeviceResources(observed.resources),sourceTime=Date.parse(observed.observedAt),windowsClockOffsetMs=Number.isFinite(sourceTime)?sourceTime-Date.parse(checkedAt):undefined,elapsed=performance.now()-startedMono;
+  const age=value=>Number.isFinite(value)&&value>=0&&value<=18000?value+elapsed:undefined;
+  if(resources){resources.ageAtReceiptMs=age(observed.resources?.sampledAgeMs);resources.windowsAgeAtReceiptMs=age(observed.resources?.windows?.sampledAgeMs);resources.lockAgeAtReceiptMs=age(observed.resources?.lockAgeMs);}
+  const linuxAt=Date.parse(resources?.clock?.sampledAt),linuxAge=resources?.ageAtReceiptMs,linuxClockOffsetMs=Number.isFinite(linuxAt)&&Number.isFinite(linuxAge)?linuxAt-Date.parse(checkedAt)+linuxAge/2:undefined;
+  const rawDiagnostic=observed.resources?.diagnostic,diagnostic=['WSL_PROBE_TIMEOUT','WSL_PROBE_FAILED'].includes(rawDiagnostic?.code)?{kind:'linux-state',code:rawDiagnostic.code}:undefined,observer=observation(checkedAt);
+  if(resources)resources.receipt={sessionId:observer.sessionId,monotonicMs:observer.monotonicMs};
+  heartbeat={format:'wsl-device-v1',id:device.id,connection:'reachable',checkedAt,lastSeenAt:checkedAt,observer,...(Number.isFinite(windowsClockOffsetMs)?{windowsClockOffsetMs,clockOffsetMs:windowsClockOffsetMs}:{}),...(Number.isFinite(linuxClockOffsetMs)?{linuxClockOffsetMs,linuxClockUncertaintyMs:linuxAge/2+1000}:{}),host:{id:device.id,name:device.name||observed.computerName,computerName:observed.computerName,platform:'win32',source:'sampled',observedAt:checkedAt},resources,...(diagnostic?{diagnostic}:{})};
+ }catch(error){const checkedAt=new Date().toISOString(),diagnostic=error.diagnostic||{kind:'configuration',code:'DEVICE_PROBE_CONFIGURATION_INVALID'};heartbeat={format:'wsl-device-v1',id:device.id,connection:error.connection==='unreachable'?'unreachable':'unknown',checkedAt,observer:observation(checkedAt),...(previous?.lastSeenAt?{lastSeenAt:previous.lastSeenAt}:{}),resources:normalizeDeviceResources(previous?.resources),error:diagnostic.code,diagnostic};}
  const temporary=file+'.'+randomUUID()+'.tmp';await mkdir(resolve(root),{recursive:true});await writeFile(temporary,JSON.stringify(heartbeat,null,2)+'\n',{mode:0o600});await rename(temporary,file);return heartbeat;
 }
 
