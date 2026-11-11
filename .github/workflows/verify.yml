@@ -25,12 +25,13 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/wsl-console-browser" --no-package-lock --no-audit --no-fund playwright@1.65.0
           "$RUNNER_TEMP/wsl-console-browser/node_modules/.bin/playwright" install --with-deps chromium
-      - name: 完整界面与阶段排队浏览器验收
+      - name: 完整界面、阶段排队与执行电脑浏览器验收
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/wsl-console-browsers
         run: |
           node test/browser.check.mjs --playwright-root "$RUNNER_TEMP/wsl-console-browser" --output "$RUNNER_TEMP/wsl-console-evidence/full"
           node test/workflow-wait.browser.check.mjs --playwright-root "$RUNNER_TEMP/wsl-console-browser" --output "$RUNNER_TEMP/wsl-console-evidence/workflow-wait"
+          node test/host.browser.check.mjs --playwright-root "$RUNNER_TEMP/wsl-console-browser" --output "$RUNNER_TEMP/wsl-console-evidence/host"
       - name: 保留测试数据验收证据
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

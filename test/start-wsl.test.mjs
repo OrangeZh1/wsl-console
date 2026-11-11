@@ -34,7 +34,7 @@ test('manual launcher is platform-gated, idempotent and never stops a reused bac
 
 test('hidden WSL core survives its launcher and stops only its own temporary instance',{skip:process.platform!=='win32'},async t=>{
  const directory=await mkdtemp(join(tmpdir(),'wsl-console-hidden-'));t.after(()=>rm(directory,{recursive:true,force:true}));
- for(const name of ['start-wsl.mjs','lan-relay.mjs','server.mjs','retention.mjs','failure.mjs','resources.mjs'])await copyFile(new URL('../'+name,import.meta.url),join(directory,name));
+ for(const name of ['start-wsl.mjs','lan-relay.mjs','server.mjs','retention.mjs','failure.mjs','resources.mjs','host.mjs'])await copyFile(new URL('../'+name,import.meta.url),join(directory,name));
  const socket=http.createServer();await new Promise(ok=>socket.listen(0,'127.0.0.1',ok));const port=socket.address().port;await new Promise(ok=>socket.close(ok));
  const match=directory.match(/^([a-z]):[\\/](.*)$/i),runsRoot='/mnt/'+match[1].toLowerCase()+'/'+match[2].replaceAll('\\','/')+'/runs';
  await mkdir(join(directory,'runs'));await writeFile(join(directory,'config.json'),JSON.stringify({port,runsRoot}));

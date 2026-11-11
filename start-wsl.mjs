@@ -3,6 +3,7 @@ import {mkdir,readFile,writeFile,rename,rm,lstat} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
+import {hostname} from 'node:os';
 import {privateIPv4} from './lan-relay.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url)),stateFile=join(root,'.local/lan-session.json');
@@ -45,7 +46,7 @@ export async function startWslConsole(options={}){
  if(backend&&backend.application!=='wsl-console')throw Error('LOCAL_PORT_IN_USE');
  if(!backend){
   const instanceId=randomUUID();
-  startHidden('wsl.exe',['-d',distro,'-u',user,'--exec','env','WSL_CONSOLE_INSTANCE_ID='+instanceId,node,wslPath(join(root,'server.mjs')),wslPath(join(root,'config.json'))]);
+  startHidden('wsl.exe',['-d',distro,'-u',user,'--exec','env','WSL_CONSOLE_INSTANCE_ID='+instanceId,'WSL_CONSOLE_WINDOWS_HOST='+hostname(),node,wslPath(join(root,'server.mjs')),wslPath(join(root,'config.json'))]);
   for(let i=0;i<60&&!backend;i++){await wait(500);backend=await get(localUrl+'/api/viewer');}
   if(backend?.application!=='wsl-console')throw Error('LOCAL_VIEWER_START_FAILED');owned=backend.instanceId===instanceId;
  }else owned=!!(previous?.backend.owned&&previous.backend.pid===backend.pid&&previous.backend.instanceId===backend.instanceId);

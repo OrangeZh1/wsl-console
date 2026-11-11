@@ -106,6 +106,14 @@ flock --exclusive -- /home/qicore-qa/.local/state/wsl-progress/heavy-task.lock p
 
 ## 接入格式
 
+运行记录可用 `executor` 明确上报执行电脑，例如 `{"id":"qa-pc-b","name":"另一台验收电脑","hostname":"qa-pc-b","computerName":"WINDOWS-B","platform":"linux","distro":"Ubuntu-24.04","source":"reported","observedAt":"2026-11-12T00:00:00Z"}`。字段仅描述主机身份，不提供远程连接或任务控制能力；不要写入账号、密钥或令牌。`name` 是可读名称，`hostname` 是执行环境实际主机名，`computerName` 仅在已知 Windows 宿主机时填写，`distro` 是实际 WSL 发行版。`observedAt` 是该身份快照的观察时间，不是在线心跳。
+
+`createReporter()` 默认采集它所在执行环境的主机名、平台、发行版和观察时间，来源为 `sampled`；它应在实际执行端创建。控制端代写远程运行记录时，必须在定义中显式传入真实的 `executor`。人工证据可标为 `source:"manual"`，其他显式上报默认 `reported`；记录创建后保留该快照，不因刷新、切换历史或移动记录而重新推断主机。
+
+任务卡显示当前实际运行记录的执行电脑，并行记录来自不同电脑时分别列出；运行顶部、历史选项和日志旁显示所选单次运行的电脑。旧记录没有此信息时显示“未上报”，不按当前工作台主机补猜。对于主机归属已经核实的旧数据源，可在对应 `config.sources` 项显式配置 `executor`，显示来源为“数据源配置”；已有运行自己的字段优先。
+
+顶部“工作台”和资源条中的“采样电脑”指当前服务所在主机，资源采样不随任务或历史记录切换，也不代表远程电脑的内存和 CPU。`config.host` 可设置本工作台的 `id`、`name`；Windows 启动器还会传入实查的 Windows 主机名。远程机器只出现在真实记录或隔离测试数据中，不因配置过地址就视为已经接入。
+
 `config.json` 的 `runsRoot` 下，每次运行创建一个唯一目录：
 
 ```text
@@ -185,13 +193,13 @@ await reporter.activity('build','正在核对构建入口');
 npm test
 ```
 
-按 2026-11-11 的仓库可见性规则选择执行端：公开源码且 GitHub 仓库为 public 时使用 GitHub Actions；私有、internal 或未公开项目使用本机 WSL。以下本地命令在 WSL ext4 副本执行，浏览器检查复用已有项目的 Playwright 和 Linux Chromium，不给本工具新增依赖；必要的 Windows 针对性补验使用已安装的 Edge。例如：
+按 2026-11-12 的规则选择执行端：公开源码且 GitHub 仓库为 public 时使用 GitHub Actions；其余项目优先远程 WSL，远程不可达、繁忙或不满足资源准入时才考虑同样满足准入的本机 WSL。以下本地命令仅在相应 WSL 执行位置获准时使用；浏览器检查不为本工具新增运行时依赖，必要的 Windows 针对性补验使用已安装的 Edge。例如：
 
 ```text
 node test/browser.check.mjs --playwright-root /path/to/project-with-playwright --output /tmp/wsl-console-browser-evidence
 ```
 
-公开仓库的手动验收工作流位于 [GitHub Actions](https://github.com/OrangeZh1/wsl-console/actions/workflows/verify.yml)。在 Actions 中选择“手动验收”并运行；工作流只由 workflow_dispatch 触发，不在 push/PR 时自动运行。它使用 Node.js 24 运行全部单元测试，并在独立临时目录安装固定版本的 Playwright，执行完整界面及阶段排队两组 Chromium 浏览器检查，不读取业务仓库或本机配置。Windows/WSL 后台启动的实机检查仍需在对应环境执行，Linux CI 会明确显示平台不适用的跳过。
+公开仓库的手动验收工作流位于 [GitHub Actions](https://github.com/OrangeZh1/wsl-console/actions/workflows/verify.yml)。在 Actions 中选择“手动验收”并运行；工作流只由 workflow_dispatch 触发，不在 push/PR 时自动运行。它使用 Node.js 24 运行全部单元测试，并在独立临时目录安装固定版本的 Playwright，执行完整界面、阶段排队及执行电脑三组 Chromium 浏览器检查，不读取业务仓库或本机配置。Windows/WSL 后台启动的实机检查仍需在对应环境执行，Linux CI 会明确显示平台不适用的跳过。
 
 检查创建独立测试服务，覆盖逻辑任务重试记录、并行阶段进展、分类切换、延迟响应、失败日志、状态图标，以及 2040、1440、1280 和 390 像素视口。测试数据不写入实际任务；截图与报告放在 OS 临时目录或指定正式证据目录。
 
@@ -208,7 +216,25 @@ node G:\WSL\Console\start-wsl.mjs --no-browser
 
 各项目执行器负责命令、端口、资源隔离和进程生命周期。查看器不能自动识别未上报的 WSL 进程或其他聊天，也没有全局占用锁、资源预留或排队执行协议。看到运行记录不代表其他任务已被禁止启动。
 
-本工具测试与业务项目验收分别统计。公开 GitHub 项目的 CI、完整测试、类型检查和构建走 GitHub Actions；私有或未公开项目走本机 Ubuntu WSL，私有项目远端例外仅限用户当次明确范围。同范围修复重跑继续完成；未覆盖检查如实列缺口，不伪造状态、不跳过检查、不降低门禁。正式签发、部署、真实交易和分支保护仍分别授权。
+本工具测试与业务项目验收分别统计。公开 GitHub 项目的 CI、完整测试、类型检查和构建走 GitHub Actions；其余项目远程优先，并按新规则处理不可达、繁忙及排队迁移。同范围修复重跑继续完成；未覆盖检查如实列缺口，不伪造状态、不跳过检查、不降低门禁。正式签发、部署、真实交易和分支保护仍分别授权。
+
+## 设备在线、顶栏资源与执行端队列
+
+顶栏将每台设备的在线状态、上报任务和它自己的 WSL 资源放在同一位置。设备在线与命令正在执行分别判断；已过期心跳或旧任务记录显示待确认，不把工作台主机的资源套到其他电脑。没有执行电脑的旧记录保留未知归属。
+
+`config.devices` 声明已知设备（`id`、`name`、`computerName`、`transport`），`devicesRoot` 指向设备心跳目录，默认是 `runsRoot` 同级的 `devices`。只读 `/api/devices` 和 `/api/runs` 返回设备状态及任务归属。设备探测由独立 Windows 进程手动启动，不通过 HTTP 执行命令，不注册开机任务：
+
+```text
+node watch-devices.mjs .local/device-watch.json
+```
+
+私有探测配置包括 `devicesRoot` 和 `devices`；本机使用 `transport:"local"`，远程使用 `transport:"ssh"` 并提供 `ssh.host`、`user`、`identityFile` 和 `knownHostsFile`。SSH 强制专用密钥、严格已固定主机公钥、禁止密码回退。探测只读取 Windows 与已运行 WSL 的状态，不为显示在线而启动停止中的发行版。默认每15秒采样，45秒未更新即过期；进程停止后状态自然过期，不继续冒充在线。配置、密钥、真实记录和日志均不提交 Git。
+
+执行端可手动使用 `node run-queue.mjs .local/queue-config.json --watch`，或用 `--once` 只处理当前队列。配置提供 `queueRoot`、`devicesRoot` 和相同设备定义；每个 `queueRoot/<jobId>/job.json` 必须已有任务授权、明确核实的 `visibility`、`inputsReady`、有界 `peakBytes`，并由项目自己的执行器准备不可变 `inputs`（路径及SHA256）、各设备 `executors`（程序、参数及终态回执路径）。执行器必须实际实现双端资源准入、设备统一 flock 和进程收尾；声明字段不是资源锁或权限凭据。
+
+`portable:true` 且没有启动记录的排队任务优先选择远程，回退本机时仍检查相同门槛。原子任务租约覆盖实际回调生命周期，并记录设备变更及原因；已启动任务不搬迁，未知执行结果保留恢复租约、不自动重跑。WSL 停止只产生待预热候选，执行端启动后仍须重新采样及持锁。公开项目只路由到 GitHub Actions，队列不会在物理设备执行它的 CI，也不自行发布源码或派发 Actions。
+
+未接入这些执行器、尚无完整可迁移输入的旧运行记录只展示状态，不会仅凭页面上的“排队”自动接管或复制业务数据。两台物理设备各有自己的单重任务锁，任务租约负责同一任务不重复执行；查看器仍不是调度器。
 
 ## 许可
 

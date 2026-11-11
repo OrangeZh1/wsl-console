@@ -7,7 +7,37 @@ let runs=[],taskGroups=[],run=null,selectedStep=null,offset=0,logText='',selecti
 let activityViewKey=null;
 let failureKey=null,failureGeneration=0;
 let mobileTasksOpen=false,stageOptionsSignature=null;
-let resourcesBusy=false;
+let resourcesBusy=false,viewerHost=null,hostProtocol=false;
+let devices=[],deviceProtocol=false,deviceSnapshotCurrent=false,unassignedRunIds=[];
+const hostName=host=>host?.name||host?.computerName||host?.hostname||'未上报';
+const hostDescription=host=>host?[hostName(host),host.computerName&&host.computerName!==hostName(host)?'Windows '+host.computerName:null,host.hostname&&host.hostname!==hostName(host)?'主机名 '+host.hostname:null,host.distro||host.platform].filter(Boolean).join(' · '):'未上报';
+const executionText=record=>'执行电脑：'+hostDescription(record?.executor);
+function hostLocation(host){for(const key of ['computerName','hostname','id'])if(viewerHost?.[key]&&host?.[key])return viewerHost[key].toLowerCase()===host[key].toLowerCase()?'本机':'远程';return '已上报';}
+function hostBadge(host,caption='执行电脑'){
+ const badge=node('span','','host-badge'+(!host?' unknown':hostLocation(host)==='远程'?' remote':' local'));badge.setAttribute('title',caption+'：'+hostDescription(host));badge.append(wslIcon('server',{className:'host-icon'}),node('span',caption+'：','host-caption'),node('strong',hostName(host),'host-name'));if(host)badge.append(node('span',hostLocation(host),'host-location'));return badge;
+}
+function renderViewerHost(host){viewerHost=host||null;$('viewer-host').textContent=viewerHost?'工作台：'+hostName(viewerHost):'共享验收工作台';$('viewer-host').setAttribute('title',viewerHost?'工作台所在电脑：'+hostDescription(viewerHost):'当前服务尚未提供工作台主机身份');$('resource-host').replaceChildren(...(viewerHost?[hostBadge(viewerHost,'资源来自')]:[node('span',hostProtocol?'资源主机信息未提供':'旧版服务尚未提供主机信息','host-service-note')]));$('resource-host').setAttribute('title','资源仅来自工作台主机，不随所选任务切换。');}
+const deviceStates={online:'在线',unreachable:'无法连接',stale:'状态已过期',unknown:'尚未核验'},deviceWorkloads={executing:'执行中',waiting:'等待中',workflow:'流程进行中',idle:'空闲',unconfirmed:'状态待确认'};
+const deviceOnline=device=>deviceSnapshotCurrent&&device.onlineState==='online';
+const deviceStateText=device=>deviceSnapshotCurrent?(deviceStates[device.onlineState]||deviceStates.unknown):'状态待确认';
+const assignedDevices=id=>devices.filter(device=>(device.runs||[]).some(item=>item.id===id));
+function deviceResourceText(device){const data=device.resources,windows=data?.windows;if(!data)return 'WSL 资源未上报';const parts=data.state==='stopped'?['WSL 未运行']:[data.state==='unknown'?'WSL 状态未知':'WSL',data.memory?'内存 '+gib(data.memory.usedBytes)+' / '+gib(data.memory.totalBytes)+' · 可用 '+gib(data.memory.availableBytes):'内存未上报',data.swap?'Swap '+gib(data.swap.usedBytes)+' / '+gib(data.swap.totalBytes):null,data.cpu?'CPU '+data.cpu.load1.toFixed(2)+' / '+data.cpu.logicalProcessors+' 核':null].filter(Boolean);if(windows)parts.push('Windows 可用 '+gib(windows.availableBytes));return (deviceOnline(device)?'':'最后采样 · ')+parts.join(' · ');}
+function renderDevices(){
+ const list=$('devices'),left=list.scrollLeft||0,focusedRun=document.activeElement?.getAttribute?.('data-run-id');let focusTarget;list.replaceChildren();$('device-panel').setAttribute('data-protocol',deviceProtocol?'current':'legacy');$('legacy-resources').hidden=deviceProtocol;
+ if(!deviceProtocol){$('device-summary').textContent='当前服务尚未提供设备在线状态';$('device-note').textContent='';return;}
+ const online=devices.filter(deviceOnline),working=online.filter(device=>device.workload==='executing');
+ $('device-summary').textContent=deviceSnapshotCurrent?(working.length?'正在执行：'+working.map(hostName).join('、'):'当前没有已确认正在执行命令的设备')+' · '+online.length+'/'+devices.length+' 在线':'设备状态读取失败，展示最后一次记录';
+ $('device-note').textContent=unassignedRunIds.length?unassignedRunIds.length+' 条记录未标注设备':'';
+ for(const device of devices){
+  const confirmed=deviceOnline(device),active=(device.runs||[]).filter(item=>item.workState!=='history'),target=active.find(item=>item.workState==='executing')||active[0],card=node('article','','device-card'+(confirmed&&device.workload==='executing'?' working':'')),heading=node('div','','device-heading'),identity=node(target?'button':'strong',hostName(device),'device-name'+(target?' device-select':'')),state=node('span',deviceStateText(device),'device-state '+(confirmed?'online':device.onlineState==='unreachable'?'unreachable':'unknown')),location=device.transport==='local'?'本机':device.transport==='ssh'?'远程':hostLocation(device),work=node('span',confirmed?(deviceWorkloads[device.workload]||deviceWorkloads.unconfirmed):'最后上报 · 状态待确认','device-workload');
+  card.setAttribute('data-device-id',device.id);identity.setAttribute('title',hostDescription(device));heading.append(wslIcon('server',{className:'device-icon'}),identity,node('span',location,'device-location'),state,work);card.append(heading);
+  const detail=[device.detail,device.checkedAt?'核验 '+fmt(device.checkedAt):null,device.lastSeenAt?'最后在线 '+fmt(device.lastSeenAt):null].filter(Boolean).join(' · ');card.setAttribute('title',detail||'尚无设备核验时间');
+  if(target){identity.type='button';identity.setAttribute('data-run-id',target.id);identity.setAttribute('aria-label','查看'+hostName(device)+'的任务：'+target.name);identity.setAttribute('title',[hostDescription(device),target.name,target.activity].filter(Boolean).join(' · '));identity.disabled=!runs.some(record=>record.id===target.id);identity.addEventListener('click',()=>{chooseRun(target.id);if(compactMedia?.matches)mobileTasks(false)});if(target.id===focusedRun)focusTarget=identity;}
+  const resources=node('span',deviceResourceText(device),'device-resources');resources.setAttribute('aria-label',hostName(device)+'的 WSL 资源：'+deviceResourceText(device));resources.setAttribute('title',deviceResourceText(device)+' · '+(device.resources?.sampledAt?'采样 '+fmt(device.resources.sampledAt):'尚无资源采样时间'));card.append(resources);list.append(card);
+ }
+ if(!devices.length)list.append(node('span','尚未登记设备','device-empty'));list.scrollLeft=left;focusTarget?.focus?.({preventScroll:true});
+}
+function renderDeviceAssignment(){const assigned=run&&assignedDevices(run.id);$('device-assignment').textContent=!run?'':assigned.length?'归属设备：'+assigned.map(device=>hostName(device)+'（'+deviceStateText(device)+'）').join('、'):deviceProtocol?'此记录未标注设备归属':'';}
 const rememberedSteps=new Map(),rememberedRuns=new Map(),rememberedTaskRuns=new Map();
 const filterNames={running:'进行中',queued:'待启动',history:'历史与其他'},filterOf=record=>['running','queued'].includes(record.status)?record.status:'history';
 function hasRunningCommand(record){return (record?.steps||[]).some(step=>step.status==='running'&&step.command?.length)}
@@ -47,8 +77,9 @@ function renderResources(data){
  $('resource-swap').textContent=data.swap?'Swap '+gib(data.swap.usedBytes)+' / '+gib(data.swap.totalBytes):'Swap 未知';
  $('resource-cpu').textContent=data.cpu?'CPU 负载 '+data.cpu.load1.toFixed(2)+' / '+data.cpu.logicalProcessors+' 核':'CPU 负载 未知';
  $('resource-time').textContent=data.sampledAt?'采样 '+fmt(data.sampledAt)+(data.status==='available'?'':data.status==='partial'?' · 部分未知':' · 不可用'):'采样不可用';
+ $('legacy-resources').setAttribute('title','工作台主机 WSL：'+['resource-memory','resource-swap','resource-cpu','resource-time'].map(id=>$(id).textContent).join(' · '));
 }
-async function refreshResources(){if(resourcesBusy)return;resourcesBusy=true;try{renderResources(await api('/api/resources'))}catch{renderResources({})}finally{resourcesBusy=false}}
+async function refreshResources(){if(resourcesBusy||deviceProtocol)return;resourcesBusy=true;try{renderResources(await api('/api/resources'))}catch{renderResources({})}finally{resourcesBusy=false}}
 function selected(){return run?.steps.find(step=>step.id===selectedStep)}
 function renderTasks(){
  const container=$('tasks'),scroll=container.scrollTop,focusedFilter=document.activeElement?.getAttribute?.('data-filter');container.replaceChildren();
@@ -57,10 +88,11 @@ function renderTasks(){
  if(selectedGroup&&filterOf(selectedGroup)!==activeFilter)container.append(node('p','当前任务已转入'+filterNames[filterOf(selectedGroup)]+'，继续保留其详情。','task-notice'));
  for(const group of records){
    const record=group.current,waiting=groupStageQueue(group),displayState=waiting?'阶段排队':taskLabel(group.status),project=group.projects.join(' / ')||'未指定项目',meta=(group.status==='queued'?'入队 '+fmt(record.enqueuedAt)+(record.queuePosition?' · 第 '+record.queuePosition+' 位':' · 顺序未上报'):displayState+' · '+duration(record))+' · '+group.runs.length+' 次记录'+(group.running.length>1?' · '+group.running.length+' 个进行中':'');
-   const button=node('button','','task'+(group.key===selectedGroup?.key?' selected':''));button.type='button';button.setAttribute('aria-current',group.key===selectedGroup?.key?'true':'false');button.setAttribute('title',group.name+'\n'+project+'\n'+meta);button.setAttribute('aria-label',group.name+'，'+taskLabel(group.status)+'，'+project+'，'+meta);
+   const hosts=[...new Set((group.running.length?group.running:[record]).map(item=>hostDescription(item.executor)))],hostText='执行电脑：'+hosts.join('、'),button=node('button','','task'+(group.key===selectedGroup?.key?' selected':''));button.type='button';button.setAttribute('aria-current',group.key===selectedGroup?.key?'true':'false');button.setAttribute('title',group.name+'\n'+project+'\n'+hostText+'\n'+meta);button.setAttribute('aria-label',group.name+'，'+taskLabel(group.status)+'，'+project+'，'+hostText+'，'+meta);
    const heading=node('span','','task-title'),name=node('strong',record.name,'task-name'),symbol=statusIcon(waiting?'queued':group.status,displayState);name.setAttribute('title',record.name);heading.append(symbol,name);if(waiting)heading.append(node('span','阶段排队','task-wait-badge'));
-   const projectNode=node('span',project,'task-project'),timeNode=node('span',meta,'task-time');projectNode.setAttribute('title',project);timeNode.setAttribute('title',meta);button.append(heading,projectNode,timeNode);
-   if(waiting){const text=(waiting.steps.length?waiting.steps.map(step=>step.label).join('、')+'：':'')+waiting.reason;button.append(node('span',text,'task-stage-queue'));button.setAttribute('aria-label',group.name+'，阶段排队，'+project+'，'+text);}
+   const projectNode=node('span',project,'task-project'),hostNode=node('span','','task-executor'),timeNode=node('span',meta,'task-time');projectNode.setAttribute('title',project);hostNode.setAttribute('title',hostText);timeNode.setAttribute('title',meta);const hostRuns=group.running.length?group.running:[record],shown=new Set();for(const item of hostRuns){const description=hostDescription(item.executor);if(item.executor&&!shown.has(description)){shown.add(description);hostNode.append(hostBadge(item.executor));}}hostNode.hidden=!shown.size;button.append(heading,projectNode,hostNode,timeNode);
+   const assigned=[...new Set(hostRuns.flatMap(item=>assignedDevices(item.id)))];if(assigned.length)button.append(node('span','归属：'+assigned.map(device=>hostName(device)+' · '+deviceStateText(device)).join('；'),'task-device-state'));
+   if(waiting){const text=(waiting.steps.length?waiting.steps.map(step=>step.label).join('、')+'：':'')+waiting.reason;button.append(node('span',text,'task-stage-queue'));button.setAttribute('aria-label',group.name+'，阶段排队，'+project+'，'+hostText+'，'+text);}
    else if(group.status==='running'){const stages=group.running.flatMap(item=>item.steps.filter(step=>step.status==='running')),text=stages.length?stages.map(step=>step.label+(step.activity?'：'+step.activity:'')).join('；'):'当前未上报活动阶段',activity=node('span',text,'task-activity');activity.setAttribute('title',text);button.append(activity);button.setAttribute('aria-label',button.getAttribute('aria-label')+'，'+text);}
    button.addEventListener('click',()=>chooseTask(group.key));container.append(button);
  }if(!records.length)container.append(node('p',taskGroups.length?'暂无'+filterNames[activeFilter]+'任务':'暂无任务记录','task-empty'));container.scrollTop=scroll;
@@ -79,6 +111,10 @@ function renderRun(){
  const latest=group?.runs[0];$('run-context').textContent=latest&&run.id!==latest.id&&run.status!==latest.status?'正在查看较早记录，最近一次'+runLabel(latest):'';
  $('started').textContent=run.status==='queued'?'入队于 '+fmt(run.enqueuedAt):'开始于 '+fmt(run.startedAt);$('elapsed').textContent=run.status==='queued'?'尚未开始':'总耗时 '+duration(run);$('queue').textContent=run.status==='queued'?(run.queuePosition?'队列第 '+run.queuePosition+' 位':'队列顺序未上报'):'';
  $('environment').textContent=run.environment||'';$('versions').replaceChildren();
+ renderDeviceAssignment();
+ $('executor').hidden=!hostProtocol&&!run.executor;$('executor').replaceChildren(...($('executor').hidden?[]:[hostBadge(run.executor)]));$('executor').setAttribute('title',executionText(run));
+ const provenance={sampled:'执行端采集',reported:'运行记录上报',configured:'数据源配置',manual:'人工记录'},host=run.executor;
+ $('executor-info').textContent=executionText(run)+(host?' · 来源：'+(provenance[host.source]||'运行记录上报')+(host.observedAt?' · 记录于 '+fmt(host.observedAt):''):hostProtocol?' · 此记录未包含执行主机信息':' · 旧版服务未提供此字段，无法判断原记录是否包含主机信息');
  for(const version of run.versions||[]){const row=node('div','','version-row');row.append(node('strong',version.name),node('span',version.branch||'工作区'),node('code',(version.head||'').slice(0,12)),node('span','源码快照 '+(version.sha256||'').slice(0,12)));$('versions').append(row)}
  renderTasks();renderSteps();renderStep();renderActivity();loadFailure();$('updated').textContent='记录更新 '+fmt(run.updatedAt);
 }
@@ -124,6 +160,7 @@ function renderStep(){
  const step=selected();$('step-meta').replaceChildren();$('step-state').hidden=false;renderLogRefresh();
  if(!step){$('step-name').textContent=run?.error?'任务记录读取受阻':'此任务暂无阶段';$('step-detail').textContent=run?.error||'';badge($('step-state'),run?.status||'queued');$('command').hidden=true;$('command').textContent='';$('log-empty').textContent=run?.error||'执行端尚未上报阶段';return;}
  $('step-name').textContent=step.label;$('step-detail').textContent=step.detail;badge($('step-state'),stageQueue(run)&&step.status==='running'&&!step.command?.length?'queued':step.status);$('step-state').textContent=stageLabel(step);
+ if(run.executor){const executor=node('span','日志来自：'+hostName(run.executor),'step-executor');executor.setAttribute('title',executionText(run));$('step-meta').append(executor);}
  for(const value of [step.status==='queued'?'尚未开始':'耗时 '+duration(step),step.startedAt?'开始 '+fmt(step.startedAt):null,step.exitCode!==undefined?'退出码 '+step.exitCode:null,step.tests?'测试 '+step.tests.pass+' 通过 / '+step.tests.fail+' 失败 / '+step.tests.skipped+' 跳过':null].filter(Boolean))$('step-meta').append(node('span',value));
  $('command').hidden=!step.command?.length;$('command').textContent=formatCommand(step);
  if(!logText)$('log-empty').textContent=step.status==='running'?'正在等待新的日志输出':step.status==='queued'?'此阶段尚未开始，无执行日志':step.error||'此阶段尚未产生日志';
@@ -136,7 +173,7 @@ function renderEmpty(){
  clearFailure();
  $('stage-queue').hidden=true;$('stage-queue-reason').textContent='';$('stage-queue-step').textContent='';$('stage-queue-icon').replaceChildren();
  const message='暂无'+filterNames[activeFilter]+'任务';$('run-name').textContent=message;$('run-state').className='badge';$('run-state').textContent='暂无任务';
- for(const id of ['projects','started','elapsed','queue','run-context','environment','updated'])$(id).textContent='';$('versions').replaceChildren();$('source-info').hidden=true;$('run-disclosures').hidden=true;renderActivity();$('history').value='';
+ for(const id of ['projects','started','elapsed','queue','run-context','environment','updated','executor','executor-info','device-assignment'])$(id).textContent='';$('versions').replaceChildren();$('source-info').hidden=true;$('run-disclosures').hidden=true;renderActivity();$('history').value='';
  $('step-name').textContent=message;$('step-detail').textContent='选择其他分类查看任务记录。';$('step-state').hidden=true;$('step-state').textContent='';$('step-meta').replaceChildren();$('command').textContent='';$('command').hidden=true;$('log-empty').textContent=message+'，可切换其他分类。';renderTasks();renderSteps();renderHistory();
 }
 function chooseFilter(filter){
@@ -146,14 +183,16 @@ function chooseFilter(filter){
 }
 function chooseStep(id){if(id===selectedStep)return;selectedStep=id||null;if(run&&id)rememberedSteps.set(run.id,id);resetLog();renderSteps();renderStep();pollLog()}
 function chooseTask(key){const group=taskGroups.find(item=>item.key===key);if(!group)return;const target=run&&group.runs.some(item=>item.id===run.id)?run:group.runs.find(item=>item.id===rememberedTaskRuns.get(key))||group.current;chooseRun(target.id);if(compactMedia?.matches)mobileTasks(false);}
-function renderHistory(){const placeholder=node('option','选择运行记录');placeholder.value='';placeholder.disabled=true;const group=run&&groupForRun(run.id),history=$('history');$('history-caption').textContent='运行记录'+(group?'（'+group.runs.length+'）':'');history.replaceChildren(placeholder,...(group?.runs||[]).map(record=>{const option=node('option',fmt(record.startedAt||record.enqueuedAt)+' · '+runLabel(record));option.value=record.id;return option}));history.value=run?.id||'';history.disabled=!group;}
+function renderHistory(){const placeholder=node('option','选择运行记录');placeholder.value='';placeholder.disabled=true;const group=run&&groupForRun(run.id),history=$('history');$('history-caption').textContent='运行记录'+(group?'（'+group.runs.length+'）':'');history.replaceChildren(placeholder,...(group?.runs||[]).map(record=>{const option=node('option',fmt(record.startedAt||record.enqueuedAt)+' · '+runLabel(record)+(record.executor?' · '+hostName(record.executor):hostProtocol?' · 主机未记录':''));option.value=record.id;return option}));history.value=run?.id||'';history.disabled=!group;}
 function chooseRun(id){
  const record=runs.find(item=>item.id===id),group=record&&groupForRun(id);if(!record||!group)return;activeFilter=filterOf(group);rememberedRuns.set(activeFilter,id);rememberedTaskRuns.set(group.key,id);if(record.id===run?.id){run=record;renderRun();renderHistory();return;}clearFailure();run=record;selectedStep=null;resetLog();
  const remembered=rememberedSteps.get(id);const next=run.steps.find(s=>s.id===remembered)||run.steps.find(s=>s.status==='running')||run.steps.find(s=>s.status==='failed')||run.steps[0];
  if(next)chooseStep(next.id);renderRun();renderHistory();
 }
 function applyMetadata(data){
- runs=data.runs;taskGroups=groupRuns(runs);const previous=selected();if(activeFilter===null)activeFilter=taskGroups.some(item=>item.status==='running')?'running':taskGroups.some(item=>item.status==='queued')?'queued':'history';
+ hostProtocol=Object.hasOwn(data,'viewerHost');
+ renderViewerHost(data.viewerHost);
+ runs=data.runs;deviceProtocol=Array.isArray(data.devices);devices=deviceProtocol?data.devices:[];deviceSnapshotCurrent=true;unassignedRunIds=Array.isArray(data.unassignedRuns)?data.unassignedRuns:[];renderDevices();taskGroups=groupRuns(runs);const previous=selected();if(activeFilter===null)activeFilter=taskGroups.some(item=>item.status==='running')?'running':taskGroups.some(item=>item.status==='queued')?'queued':'history';
  if(run){
   const latest=runs.find(record=>record.id===run.id);
   if(latest){run=latest;if(selectedStep&&!selected()){selectedStep=null;resetLog();}else if(previous?.startedAt!==selected()?.startedAt){resetLog();}renderRun();}
@@ -166,7 +205,7 @@ async function refresh(manual=false){
  if(manual&&manualBusy)return;if(manual){manualBusy=true;$('refresh').disabled=true;$('refresh').setAttribute('aria-busy','true');buttonLabel('refresh','refresh','刷新中…');}
  // A manual refresh can join the background read without starting a second request.
  if(!metadataRequest)metadataRequest=api('/api/runs').then(applyMetadata).finally(()=>{metadataRequest=null});
- try{await metadataRequest}catch(error){connection(error.message+'，保留已读取结果','error')}
+ try{await metadataRequest}catch(error){deviceSnapshotCurrent=false;renderDevices();renderDeviceAssignment();renderTasks();connection(error.message+'，保留已读取结果','error')}
  finally{if(manual){manualBusy=false;$('refresh').disabled=false;$('refresh').setAttribute('aria-busy','false');buttonLabel('refresh','refresh','刷新状态')}}
 }
 async function pollLog(manual=false){

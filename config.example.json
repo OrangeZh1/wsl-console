@@ -1,5 +1,7 @@
 {
   "port": 4399,
   "runsRoot": "./.local/runs",
-  "sources": []
+  "sources": [],
+  "devices": [],
+  "deviceHeartbeatTtlMs": 45000
 }

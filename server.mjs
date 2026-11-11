@@ -6,6 +6,8 @@ import {randomUUID} from 'node:crypto';
 import {isExpiredHistory,startHistoryMaintenance} from './retention.mjs';
 import {failureDetails} from './failure.mjs';
 import {readResources} from './resources.mjs';
+import {captureHost,normalizeHost} from './host.mjs';
+import {readDevices} from './devices.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
 const viewerInstance=/^[a-f0-9-]{36}$/i.test(process.env.WSL_CONSOLE_INSTANCE_ID||'')?process.env.WSL_CONSOLE_INSTANCE_ID:randomUUID();
@@ -23,6 +25,7 @@ function statusOf(run){
  return run.startedAt&&!run.finished?'running':'queued';
 }
 export async function createViewer(config){
+ const viewerHost=captureHost(config.host);
  const dataRoot=resolve(config.runsRoot);await mkdir(dataRoot,{recursive:true});
  async function sources(){
   const result=[...(config.sources||[])];
@@ -39,8 +42,9 @@ export async function createViewer(config){
   const times=record.steps.flatMap(step=>[step.startedAt,...(step.attempts||[]).map(attempt=>attempt.startedAt)]).filter(Boolean).sort();
   for(const step of steps)if(['running','queued'].includes(step.status)){delete step.seconds;delete step.finishedAt;delete step.exitCode;if(step.status==='queued'){delete step.startedAt;delete step.tests;delete step.error;delete step.activity;delete step.activityUpdatedAt;}}
   const taskKey=record.taskKey||source.taskKey;
-  const run={id:source.id,taskKey:typeof taskKey==='string'&&taskKey.trim()&&taskKey.length<=160?taskKey.trim():undefined,format:record.format,name:record.name||source.name||source.id,projects:record.projects||source.projects||[],environment:record.environment||source.environment||'WSL Linux',status:record.status,enqueuedAt:record.enqueuedAt,startedAt:record.startedAt||times[0],updatedAt:record.updatedAt,finishedAt:record.finishedAt,finished:record.finished===true,versions,steps};
+  const run={id:source.id,taskKey:typeof taskKey==='string'&&taskKey.trim()&&taskKey.length<=160?taskKey.trim():undefined,format:record.format,name:record.name||source.name||source.id,projects:record.projects||source.projects||[],environment:record.environment||source.environment||'WSL Linux',status:record.status,enqueuedAt:record.enqueuedAt,startedAt:record.startedAt||times[0],updatedAt:record.updatedAt,heartbeatAt:record.heartbeatAt,finishedAt:record.finishedAt,finished:record.finished===true,versions,steps};
   run.status=statusOf(run);
+  run.executor=record.executor===undefined?normalizeHost(source.executor,'configured'):normalizeHost(record.executor);
   if(typeof record.queueReason==='string'&&record.queueReason.trim())run.queueReason=record.queueReason.trim();
   if(run.status==='failed'&&typeof record.error==='string')run.error=record.error;
   if(run.status==='queued'){delete run.startedAt;delete run.finishedAt;if(Number.isSafeInteger(record.queuePosition)&&record.queuePosition>0)run.queuePosition=record.queuePosition;}
@@ -53,13 +57,13 @@ export async function createViewer(config){
    if(!['GET','HEAD'].includes(req.method))return send(405,{error:'READ_ONLY_VIEWER'});
    if(!/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(req.headers.host||''))return send(403,{error:'LOCAL_ACCESS_ONLY'});
    const url=new URL(req.url,'http://localhost');
-   if(url.pathname==='/api/viewer')return send(200,{application:'wsl-console',pid:process.pid,instanceId:viewerInstance,platform:process.platform});
+   if(url.pathname==='/api/viewer')return send(200,{application:'wsl-console',pid:process.pid,instanceId:viewerInstance,platform:process.platform,host:viewerHost,capabilities:['devices-v1']});
    if(url.pathname==='/api/resources')return send(200,await readResources());
    const assets={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/favicon.svg':['favicon.svg','image/svg+xml'],'/icons.svg':['icons.svg','image/svg+xml'],'/icons.js':['icons.js','text/javascript; charset=utf-8']};
    if(assets[url.pathname]){const [file,type]=assets[url.pathname];return send(200,await readFile(join(root,'public',file)),type);}
-   if(url.pathname==='/api/runs'){
+   if(url.pathname==='/api/runs'||url.pathname==='/api/devices'){
     const runs=[];for(const source of await sources()){try{const run=await load(source);if(run)runs.push(run)}catch(error){runs.push({id:source.id,name:source.name||source.id,status:'blocked',error:'无法读取运行记录：'+error.message,steps:[],versions:[],projects:source.projects||[]})}}
-    runs.sort((a,b)=>String(b.startedAt||b.enqueuedAt||'').localeCompare(String(a.startedAt||a.enqueuedAt||'')));return send(200,{runs,readOnly:true});
+    runs.sort((a,b)=>String(b.startedAt||b.enqueuedAt||'').localeCompare(String(a.startedAt||a.enqueuedAt||'')));const devices=await readDevices(config,{runs,viewerHost,viewerResources:await readResources()});return send(200,{...(url.pathname==='/api/runs'?{runs}:{}),readOnly:true,viewerHost,...devices});
    }
    const failure=url.pathname.match(/^\/api\/runs\/([^/]+)\/failure$/);
    const match=failure||url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/steps\/([^/]+)\/log)?$/);
