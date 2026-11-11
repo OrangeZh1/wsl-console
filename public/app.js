@@ -5,6 +5,7 @@ let runs=[],taskGroups=[],run=null,selectedStep=null,offset=0,logText='',selecti
 let activityViewKey=null;
 let failureKey=null,failureGeneration=0;
 let mobileTasksOpen=false,stageOptionsSignature=null;
+let resourcesBusy=false;
 const rememberedSteps=new Map(),rememberedRuns=new Map(),rememberedTaskRuns=new Map();
 const filterNames={running:'执行中',queued:'等待',history:'历史与其他'},filterOf=record=>['running','queued'].includes(record.status)?record.status:'history';
 const taskKeyOf=record=>record.taskKey?'key:'+record.taskKey:'legacy:'+JSON.stringify([[...(record.projects||[])].sort(),record.name]);
@@ -17,7 +18,7 @@ function groupRuns(records){
 const compactMedia=typeof matchMedia==='function'?matchMedia('(max-width:768px)'):null;
 const formatCommand=step=>step.command?.map(arg=>/\s/.test(arg)?JSON.stringify(arg):arg).join(' ')||'';
 const fmt=value=>value?new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(value)):'—';
-const duration=step=>{const seconds=step.seconds??(step.startedAt?Math.max(0,Math.floor((new Date(step.finishedAt||Date.now())-new Date(step.startedAt))/1000)):null);if(seconds===null)return '—';return seconds>=60?Math.floor(seconds/60)+'分 '+Math.floor(seconds%60)+'秒':Math.floor(seconds)+'秒'};
+const duration=step=>{const live=step.status==='running',seconds=step.status==='queued'?null:live?(step.startedAt?Math.max(0,Math.floor((Date.now()-new Date(step.startedAt))/1000)):null):step.seconds??(step.startedAt?Math.max(0,Math.floor((new Date(step.finishedAt||Date.now())-new Date(step.startedAt))/1000)):null);if(seconds===null)return '—';return seconds>=60?Math.floor(seconds/60)+'分 '+Math.floor(seconds%60)+'秒':Math.floor(seconds)+'秒'};
 const badge=(element,status)=>{element.className='badge '+status;element.textContent=labels[status]||status};
 function connection(message,state){$('connection').textContent=message;$('connection').className='connection '+state;}
 function node(tag,text,className){const el=document.createElement(tag);el.textContent=text;if(className)el.className=className;return el}
@@ -26,6 +27,14 @@ function legacyCopy(text){if(typeof document.execCommand!=='function')return fal
 function disclosureIcons(){for(const id of ['activity','failure','source-info'])$(id+'-chevron').replaceChildren(wslIcon($(id).open?'chevron-down':'chevron-right',{className:'disclosure-icon'}));}
 function mobileTasks(open){mobileTasksOpen=open;$('task-nav').className='task-sidebar'+(open?' mobile-expanded':'');$('task-toggle').setAttribute('aria-expanded',String(open));$('task-toggle-label').textContent=open?'收起':'任务';$('task-toggle-icon').replaceChildren(wslIcon(open?'chevron-down':'list',{className:'button-icon'}));if(open&&compactMedia?.matches)for(const id of ['activity','failure','source-info'])$(id).open=false;}
 async function api(path){const response=await fetch(path,{cache:'no-store'});if(!response.ok)throw Error('读取失败（'+response.status+'）');return response.json()}
+const gib=value=>(value/1024**3).toFixed(1)+' GiB';
+function renderResources(data){
+ $('resource-memory').textContent=data.memory?'内存 '+gib(data.memory.usedBytes)+' 已用 / '+gib(data.memory.availableBytes)+' 可用 / '+gib(data.memory.totalBytes)+' 总量':'内存 未知';
+ $('resource-swap').textContent=data.swap?'Swap '+gib(data.swap.usedBytes)+' / '+gib(data.swap.totalBytes):'Swap 未知';
+ $('resource-cpu').textContent=data.cpu?'CPU 负载 '+data.cpu.load1.toFixed(2)+' / '+data.cpu.logicalProcessors+' 核':'CPU 负载 未知';
+ $('resource-time').textContent=data.sampledAt?'采样 '+fmt(data.sampledAt)+(data.status==='available'?'':data.status==='partial'?' · 部分未知':' · 不可用'):'采样不可用';
+}
+async function refreshResources(){if(resourcesBusy)return;resourcesBusy=true;try{renderResources(await api('/api/resources'))}catch{renderResources({})}finally{resourcesBusy=false}}
 function selected(){return run?.steps.find(step=>step.id===selectedStep)}
 function renderTasks(){
  const container=$('tasks'),scroll=container.scrollTop,focusedFilter=document.activeElement?.getAttribute?.('data-filter');container.replaceChildren();
@@ -96,14 +105,17 @@ function renderActivity(){
  disclosureIcons();
 }
 function renderStep(){
- const step=selected();$('step-meta').replaceChildren();$('step-state').hidden=false;
+ const step=selected();$('step-meta').replaceChildren();$('step-state').hidden=false;renderLogRefresh();
  if(!step){$('step-name').textContent=run?.error?'任务记录读取受阻':'此任务暂无阶段';$('step-detail').textContent=run?.error||'';badge($('step-state'),run?.status||'queued');$('command').hidden=true;$('command').textContent='';$('log-empty').textContent=run?.error||'执行端尚未上报阶段';return;}
  $('step-name').textContent=step.label;$('step-detail').textContent=step.detail;badge($('step-state'),step.status);
  for(const value of [step.status==='queued'?'尚未开始':'耗时 '+duration(step),step.startedAt?'开始 '+fmt(step.startedAt):null,step.exitCode!==undefined?'退出码 '+step.exitCode:null,step.tests?'测试 '+step.tests.pass+' 通过 / '+step.tests.fail+' 失败 / '+step.tests.skipped+' 跳过':null].filter(Boolean))$('step-meta').append(node('span',value));
  $('command').hidden=!step.command?.length;$('command').textContent=formatCommand(step);
  if(!logText)$('log-empty').textContent=step.status==='running'?'正在等待新的日志输出':step.status==='queued'?'此阶段尚未开始，无执行日志':step.error||'此阶段尚未产生日志';
 }
-function resetLog(){selection++;offset=0;logText='';logBusy=null;$('log').textContent='';$('log-empty').hidden=false;$('copy').disabled=true;$('copy').setAttribute('aria-busy','false');buttonLabel('copy','copy','复制日志');$('log-summary').textContent='实时日志';$('log-size').textContent='0 B';$('log-view').scrollTop=0;}
+function renderLogRefresh(){const busy=logBusy?.manual===true;$('refresh-log').disabled=busy||!run||!selected()||run.status==='queued'||selected().status==='queued';$('refresh-log').setAttribute('aria-busy',String(busy));buttonLabel('refresh-log','refresh',busy?'刷新中…':'刷新日志');}
+function logLineCount(text){return text?text.split('\n').length-(text.endsWith('\n')?1:0):0;}
+function renderLog(){const count=logLineCount(logText);$('log').textContent=logText;$('log-numbers').textContent=Array.from({length:count},(_,index)=>index+1).join('\n');$('log-content').hidden=!logText;}
+function resetLog(){selection++;offset=0;logText='';logBusy=null;renderLog();$('log-empty').hidden=false;$('copy').disabled=true;$('copy').setAttribute('aria-busy','false');buttonLabel('copy','copy','复制日志');$('log-summary').textContent='实时日志';$('log-size').textContent='0 B';$('log-view').scrollTop=0;renderLogRefresh();}
 function renderEmpty(){
  clearFailure();
  const message='暂无'+filterNames[activeFilter]+'任务';$('run-name').textContent=message;$('run-state').className='badge';$('run-state').textContent='暂无任务';
@@ -140,20 +152,24 @@ async function refresh(manual=false){
  try{await metadataRequest}catch(error){connection(error.message+'，保留已读取结果','error')}
  finally{if(manual){manualBusy=false;$('refresh').disabled=false;$('refresh').setAttribute('aria-busy','false');buttonLabel('refresh','refresh','刷新状态')}}
 }
-async function pollLog(){
- if(!run||!selectedStep||selected()?.status==='queued'||run.status==='queued'||logBusy!==null)return;
- const stamp=selection,runId=run.id,stepId=selectedStep;logBusy=stamp;
+async function pollLog(manual=false){
+ if(!run||!selectedStep||selected()?.status==='queued'||run.status==='queued'||logBusy&&(logBusy.manual||!manual))return;
+ const stamp=selection,runId=run.id,stepId=selectedStep,request={manual};logBusy=request;renderLogRefresh();
  try{
-  const data=await api('/api/runs/'+encodeURIComponent(runId)+'/steps/'+encodeURIComponent(stepId)+'/log?offset='+offset);if(stamp!==selection)return;
-  if(data.reset){offset=0;logText='';$('log').textContent='';$('log-empty').hidden=false;$('copy').disabled=true;}offset=data.nextOffset;
-  if(data.text){logText+=data.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g,'').replace(/\r(?!\n)/g,'\n');if(logText.length>1500000)logText='[仅显示最近 1.5MB 日志]\n'+logText.slice(-1500000);$('log').textContent=logText;$('log-empty').hidden=true;$('copy').disabled=false;if($('follow').checked)$('log-view').scrollTop=$('log-view').scrollHeight}
-  $('log-size').textContent=(data.total/1024).toFixed(1)+' KiB';$('log-summary').textContent=data.total?'运行日志 · '+logText.split('\n').length+' 行':'实时日志';
- }catch(error){if(stamp===selection)$('log-summary').textContent=error.message}finally{if(stamp===selection)logBusy=null}
+  const path='/api/runs/'+encodeURIComponent(runId)+'/steps/'+encodeURIComponent(stepId)+'/log?offset=';
+  let data=await api(path+(manual?0:offset));if(stamp!==selection||logBusy!==request)return;
+  if(manual){const target=data.total;let text=data.text||'',truncated=false;while(data.nextOffset<target){const previous=data.nextOffset,next=await api(path+previous);if(stamp!==selection||logBusy!==request)return;if(next.reset||next.nextOffset<=previous)throw Error('日志在读取期间发生变化，请重新刷新');text+=next.text||'';if(text.length>1500000){text=text.slice(-1500000);truncated=true}data=next;}data={...data,text:(truncated?'[仅显示最近 1.5MB 日志]\n':'')+text};}
+  const view=$('log-view'),scrollTop=view.scrollTop,scrollLeft=view.scrollLeft;
+  if(manual||data.reset){offset=0;logText='';}offset=data.nextOffset;
+  if(data.text||manual||data.reset){logText+=(data.text||'').replace(/\x1b\[[0-9;]*[A-Za-z]/g,'').replace(/\r(?!\n)/g,'\n');if(logText.length>1500000)logText='[仅显示最近 1.5MB 日志]\n'+logText.slice(-1500000);renderLog();$('log-empty').hidden=Boolean(logText);$('copy').disabled=!logText||$('copy').getAttribute('aria-busy')==='true';if($('follow').checked)view.scrollTop=view.scrollHeight;else{view.scrollTop=scrollTop;view.scrollLeft=scrollLeft}}
+  $('log-size').textContent=(data.total/1024).toFixed(1)+' KiB';$('log-summary').textContent=data.total?'运行日志 · '+logLineCount(logText)+' 行':'实时日志';
+ }catch(error){if(stamp===selection&&logBusy===request)$('log-summary').textContent=error.message}finally{if(stamp===selection&&logBusy===request){logBusy=null;renderLogRefresh()}}
 }
 $('history').addEventListener('change',event=>{chooseRun(event.target.value);if(compactMedia?.matches)mobileTasks(false)});$('refresh').addEventListener('click',()=>refresh(true));$('stage-picker').addEventListener('change',event=>chooseStep(event.target.value));$('task-toggle').addEventListener('click',()=>mobileTasks(!mobileTasksOpen));
 $('copy').addEventListener('click',async()=>{const stamp=selection,text=logText;$('copy').disabled=true;$('copy').setAttribute('aria-busy','true');buttonLabel('copy','copy','复制中…');let copied=false;try{if(typeof navigator.clipboard?.writeText==='function')try{await navigator.clipboard.writeText(text);copied=true}catch{}if(stamp!==selection)return;if(!copied)copied=legacyCopy(text);buttonLabel('copy','copy',copied?'已复制':'请手动选择复制')}finally{if(stamp===selection){$('copy').disabled=!logText;$('copy').setAttribute('aria-busy','false')}}});
+$('refresh-log').addEventListener('click',()=>pollLog(true));
 $('follow').addEventListener('change',()=>{if($('follow').checked)$('log-view').scrollTop=$('log-view').scrollHeight});
 compactMedia?.addEventListener('change',event=>{if(event.matches)$('activity').open=false});
 for(const id of ['activity','failure','source-info'])$(id).addEventListener('toggle',()=>{if($(id).open){for(const other of ['activity','failure','source-info'])if(other!==id)$(other).open=false;if(compactMedia?.matches)mobileTasks(false)}disclosureIcons();});
 $('failure-status-icon').replaceChildren(wslIcon('status-failed',{className:'disclosure-icon'}));disclosureIcons();
-mobileTasks(false);buttonLabel('refresh','refresh','刷新状态');buttonLabel('copy','copy','复制日志');refresh();setInterval(()=>refresh(),2500);setInterval(pollLog,1000);setInterval(()=>{if(run){$('elapsed').textContent=run.status==='queued'?'尚未开始':'总耗时 '+duration(run);renderStep();if($('activity').open)renderActivity()}},1000);
+mobileTasks(false);buttonLabel('refresh','refresh','刷新状态');buttonLabel('copy','copy','复制日志');renderLogRefresh();refresh();refreshResources();setInterval(refreshResources,5000);setInterval(()=>refresh(),2500);setInterval(pollLog,1000);setInterval(()=>{if(run){$('elapsed').textContent=run.status==='queued'?'尚未开始':'总耗时 '+duration(run);renderStep();if($('activity').open)renderActivity()}},1000);

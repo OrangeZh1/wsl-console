@@ -17,6 +17,16 @@ class Element{
  addEventListener(name,handler){this.handlers[name]=handler}
 }
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('log gutter follows partial lines and blank lines while copy retains only raw text',async()=>{
+ const c=await client();c.answer(c.requests[0],{runs:[record('numbered'),record('waiting','queued')]});await turn();
+ c.answer(c.requests.find(request=>request.path.includes('/steps/')),{text:'first\npar',nextOffset:9,total:9});await turn();
+ assert.equal(c.element('log-numbers').textContent,'1\n2');assert.equal(c.element('log-content').hidden,false);assert.equal(c.element('log-summary').textContent,'运行日志 · 2 行');
+ const appended=c.call('pollLog()');c.answer(c.requests.at(-1),{text:'tial\n\n<img src=x>\n',nextOffset:29,total:29});await appended;
+ assert.equal(c.element('log').textContent,'first\npartial\n\n<img src=x>\n');assert.equal(c.element('log-numbers').textContent,'1\n2\n3\n4');assert.equal(c.element('log-summary').textContent,'运行日志 · 4 行');
+ c.call('navigator.clipboard.writeText=async text=>{globalThis.copied=text}');await c.element('copy').handlers.click();assert.equal(c.call('copied'),'first\npartial\n\n<img src=x>\n');
+ c.call("chooseRun('waiting')");assert.equal(c.element('log-numbers').textContent,'');assert.equal(c.element('log-content').hidden,true);
+});
 const record=(id,status='running',steps=[{id:'unit',label:id+' 单测',status,startedAt:status==='running'?'2026-11-09T12:00:00Z':undefined}])=>({id,name:id+' 任务',status,projects:[id],steps,versions:[],enqueuedAt:'2026-11-09T11:00:00Z',startedAt:status==='running'?'2026-11-09T12:00:00Z':undefined});
 async function client({compact=false}={}){
  const elements=new Map(),requests=[],intervals=[];
@@ -44,6 +54,42 @@ test('background and manual refresh share one read and preserve the task chosen 
  assert.equal(c.element('refresh').children[0].attributes['data-icon'],'lucide:refresh-cw');
  c.answer(request,{runs:[record('a','queued'),{...record('b','queued'),queuePosition:4}]});await Promise.all([background,manual]);assert.equal(c.element('run-name').textContent,'b 任务');assert.equal(c.element('history').value,'b');assert.equal(c.element('queue').textContent,'队列第 4 位');assert.equal(c.element('refresh').disabled,false);assert.equal(c.element('refresh').textContent,'刷新状态');
  const failed=c.call('refresh(true)');c.requests.at(-1).reject(Error('network failure'));await failed;assert.equal(c.element('refresh').disabled,false);assert.equal(c.element('run-name').textContent,'b 任务');assert.match(c.element('connection').textContent,/network failure/);assert.equal(c.element('connection').className,'connection error');const recovered=c.call('refresh()');c.answer(c.requests.at(-1),{runs:[record('a','queued'),record('b','queued')]});await recovered;assert.equal(c.element('connection').className,'connection connected');
+});
+
+test('running duration uses its stable start through metadata and log refresh instead of stale finished seconds',async()=>{
+ const c=await client();c.call("let clock=Date.parse('2026-11-10T12:02:00Z');Date=class extends Date{static now(){return clock}}");const a=record('time','running',[{id:'unit',label:'计时阶段',status:'running',startedAt:'2026-11-10T12:00:00Z',seconds:5,finishedAt:'2026-11-10T12:00:05Z'}]);a.startedAt='2026-11-10T11:50:00Z';c.answer(c.requests[0],{runs:[a]});await turn();c.answer(c.requests.find(request=>request.path.includes('/steps/')),{text:'日志',nextOffset:6,total:6});await turn();assert.match(c.element('step-meta').textContent,/耗时 2分 0秒/);assert.equal(c.element('elapsed').textContent,'总耗时 12分 0秒');
+ c.call('clock+=15000');const metadata=c.call('refresh(true)');c.answer(c.requests.findLast(request=>request.path==='/api/runs'),{runs:[a]});await metadata;assert.match(c.element('step-meta').textContent,/耗时 2分 15秒/);
+ const logs=c.element('refresh-log').handlers.click();c.answer(c.requests.at(-1),{text:'重新读取的日志',nextOffset:20,total:20});await logs;c.call('clock+=15000');c.intervals.at(-1)();assert.match(c.element('step-meta').textContent,/耗时 2分 30秒/);assert.equal(c.call("duration({status:'passed',seconds:41.465,startedAt:'2026-11-10T12:00:00Z',finishedAt:'2026-11-10T12:00:41.465Z'})"),'41秒');assert.equal(c.call("duration({status:'queued',seconds:5,startedAt:'2026-11-10T12:00:00Z'})"),'—');assert.equal(c.call("duration({status:'running',seconds:5})"),'—');
+});
+
+test('manual log refresh replaces from offset zero, preserves scroll and rejects a superseded poll',async()=>{
+ const c=await client();c.answer(c.requests[0],{runs:[record('a')]});await turn();c.answer(c.requests.find(request=>request.path.includes('/steps/')),{text:'old log\n',nextOffset:8,total:8});await turn();
+ c.element('follow').checked=false;c.element('log-view').scrollTop=17;c.element('log-view').scrollLeft=9;
+ const background=c.call('pollLog()'),oldPoll=c.requests.at(-1);assert.match(oldPoll.path,/offset=8$/);assert.equal(c.element('refresh-log').attributes['aria-busy'],'false');
+ const manual=c.element('refresh-log').handlers.click(),reload=c.requests.at(-1),count=c.requests.length;assert.match(reload.path,/offset=0$/);assert.equal(c.element('log').textContent,'old log\n');assert.equal(c.element('refresh-log').attributes['aria-busy'],'true');assert.equal(c.element('refresh-log').disabled,true);assert.equal(c.element('refresh').disabled,false);assert.equal(c.element('copy').disabled,false);
+ await c.element('refresh-log').handlers.click();assert.equal(c.requests.length,count,'duplicate manual clicks do not issue another request');
+ c.answer(oldPoll,{text:'STALE APPEND',nextOffset:20,total:20});await background;assert.equal(c.element('log').textContent,'old log\n');assert.equal(c.element('refresh-log').attributes['aria-busy'],'true');
+ c.answer(reload,{text:'fresh full log\n',nextOffset:15,total:15});await manual;assert.equal(c.element('log').textContent,'fresh full log\n');assert.equal(c.call('offset'),15);assert.equal(c.element('follow').checked,false);assert.equal(c.element('log-view').scrollTop,17);assert.equal(c.element('log-view').scrollLeft,9);assert.equal(c.element('refresh-log').attributes['aria-busy'],'false');assert.equal(c.element('refresh-log').textContent,'刷新日志');
+ const failed=c.element('refresh-log').handlers.click();c.requests.at(-1).reject(Error('manual read failed'));await failed;assert.equal(c.element('log').textContent,'fresh full log\n');assert.equal(c.call('offset'),15);assert.match(c.element('log-summary').textContent,/manual read failed/);assert.equal(c.element('refresh-log').disabled,false);
+ const empty=c.element('refresh-log').handlers.click();c.answer(c.requests.at(-1),{text:'',nextOffset:0,total:0});await empty;assert.equal(c.element('log').textContent,'');assert.equal(c.element('log-empty').hidden,false);assert.equal(c.element('copy').disabled,true);assert.equal(c.element('refresh-log').disabled,false);
+});
+
+test('manual log reads cannot cross selections and do not disturb a concurrent copy action',async()=>{
+ const c=await client();c.answer(c.requests[0],{runs:[record('a'),record('b'),record('queued','queued'),record('empty','blocked',[])]});await turn();c.answer(c.requests.find(request=>request.path.includes('/a/steps/')),{text:'a log',nextOffset:5,total:5});await turn();
+ c.call('navigator.clipboard.writeText=()=>new Promise(resolve=>globalThis.finishCopy=resolve)');const copying=c.element('copy').handlers.click();const manual=c.element('refresh-log').handlers.click(),request=c.requests.at(-1);c.answer(request,{text:'new a log',nextOffset:9,total:9});await manual;assert.equal(c.element('copy').attributes['aria-busy'],'true');assert.equal(c.element('copy').disabled,true);c.call('finishCopy()');await copying;assert.equal(c.element('copy').attributes['aria-busy'],'false');
+ const delayed=c.element('refresh-log').handlers.click(),oldRequest=c.requests.at(-1);c.call("chooseRun('b')");const bRequest=c.requests.at(-1);assert.equal(c.element('refresh-log').attributes['aria-busy'],'false');c.answer(oldRequest,{text:'A LATE RESULT',nextOffset:13,total:13});await delayed;assert.equal(c.element('log').textContent,'');c.answer(bRequest,{text:'b log',nextOffset:5,total:5});await turn();assert.equal(c.element('log').textContent,'b log');
+ c.call("chooseRun('queued')");const count=c.requests.length;assert.equal(c.element('refresh-log').disabled,true);await c.element('refresh-log').handlers.click();assert.equal(c.requests.length,count);c.call("chooseRun('empty')");assert.equal(c.element('refresh-log').disabled,true);c.call("chooseFilter('history')");c.call('applyMetadata({runs:[]})');assert.equal(c.element('refresh-log').disabled,true);
+});
+
+test('manual refresh reads all existing chunks before replacing the visible log',async()=>{
+ const c=await client();c.answer(c.requests[0],{runs:[record('a')]});await turn();c.answer(c.requests.find(request=>request.path.includes('/steps/')),{text:'old',nextOffset:3,total:3});await turn();
+ const pending=c.element('refresh-log').handlers.click();c.answer(c.requests.at(-1),{text:'new first\n',nextOffset:10,total:20});await turn();assert.equal(c.element('log').textContent,'old');assert.match(c.requests.at(-1).path,/offset=10$/);assert.equal(c.element('refresh-log').attributes['aria-busy'],'true');c.answer(c.requests.at(-1),{text:'new last\n',nextOffset:20,total:20});await pending;assert.equal(c.element('log').textContent,'new first\nnew last\n');assert.equal(c.call('offset'),20);
+ const failed=c.element('refresh-log').handlers.click();c.answer(c.requests.at(-1),{text:'partial',nextOffset:7,total:20});await turn();c.requests.at(-1).reject(Error('second chunk failed'));await failed;assert.equal(c.element('log').textContent,'new first\nnew last\n');assert.equal(c.call('offset'),20);assert.equal(c.element('refresh-log').disabled,false);assert.match(c.element('log-summary').textContent,/second chunk failed/);
+});
+
+test('aggregate resources stay separate from task and log loading and report unknown after read failure',async()=>{
+ const c=await client(),resource=c.requests.find(request=>request.path==='/api/resources');assert.ok(resource);c.answer(resource,{status:'available',sampledAt:'2026-11-10T10:00:00Z',memory:{usedBytes:2*1024**3,availableBytes:4*1024**3,totalBytes:6*1024**3},swap:{usedBytes:0,totalBytes:4*1024**3},cpu:{load1:1.25,logicalProcessors:4}});await turn();assert.match(c.element('resource-memory').textContent,/2\.0 GiB 已用 \/ 4\.0 GiB 可用 \/ 6\.0 GiB 总量/);assert.equal(c.element('resource-cpu').textContent,'CPU 负载 1.25 / 4 核');assert.match(c.element('resource-time').textContent,/2026\/11\/10/);assert.equal(c.element('refresh').disabled,false);assert.equal(c.element('refresh-log').attributes['aria-busy'],'false');
+ const pending=c.call('refreshResources()'),count=c.requests.length;await c.call('refreshResources()');assert.equal(c.requests.length,count);c.requests.at(-1).reject(Error('offline'));await pending;assert.equal(c.element('resource-memory').textContent,'内存 未知');assert.equal(c.element('resource-cpu').textContent,'CPU 负载 未知');assert.equal(c.element('resource-time').textContent,'采样不可用');
 });
 
 test('a stage retry clears old logs and task navigation lists concurrent runs separately from queued stages',async()=>{

@@ -1,4 +1,4 @@
-import {spawn,spawnSync} from 'node:child_process';
+import {spawnSync} from 'node:child_process';
 import {mkdir,readFile,writeFile,rename,rm,lstat} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -9,6 +9,14 @@ const root=dirname(fileURLToPath(import.meta.url)),stateFile=join(root,'.local/l
 const wait=ms=>new Promise(ok=>setTimeout(ok,ms));
 async function get(url){try{const response=await fetch(url,{signal:AbortSignal.timeout(1500)});return response.ok?await response.json():null}catch{return null}}
 function wslPath(path){const match=resolve(path).match(/^([a-z]):[\\/](.*)$/i);if(!match)throw Error('LOCAL_DRIVE_PATH_REQUIRED');return '/mnt/'+match[1].toLowerCase()+'/'+match[2].replaceAll('\\','/');}
+function startHidden(file,args){
+ const literal=value=>"'"+value.replaceAll("'","''")+"'";
+ const argument=value=>/[\s"]/u.test(value)?'"'+value.replace(/(\\*)"/g,'$1$1\\"').replace(/(\\+)$/,'$1$1')+'"':value;
+ // Start-Process keeps the child alive after the launcher exits, without detached mode's new console.
+ const script="$ErrorActionPreference='Stop'; (Start-Process -WindowStyle Hidden -FilePath "+literal(file)+' -ArgumentList '+literal(args.map(argument).join(' '))+' -PassThru).Id';
+ const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{encoding:'utf8',windowsHide:true});
+ if(result.status!==0)throw Error('HIDDEN_PROCESS_START_FAILED: '+(result.error?.code||result.stderr.trim()));
+}
 function physicalAddresses(){
  const command="@(Get-NetIPConfiguration | Where-Object { $_.NetAdapter.Status -eq 'Up' -and $_.NetAdapter.HardwareInterface } | ForEach-Object { foreach($address in $_.IPv4Address) { [pscustomobject]@{address=$address.IPAddress;prefix=$address.PrefixLength;interface=$_.InterfaceAlias} } }) | ConvertTo-Json -Compress";
  const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',command],{encoding:'utf8',windowsHide:true});
@@ -36,10 +44,10 @@ export async function startWslConsole(options={}){
  }
  if(backend&&backend.application!=='wsl-console')throw Error('LOCAL_PORT_IN_USE');
  if(!backend){
-  const instanceId=randomUUID();let startError;
-  const processHandle=spawn('wsl.exe',['-d',distro,'-u',user,'--exec','env','WSL_CONSOLE_INSTANCE_ID='+instanceId,node,wslPath(join(root,'server.mjs')),wslPath(join(root,'config.json'))],{detached:true,stdio:'ignore',windowsHide:true});processHandle.once('error',error=>{startError=error});processHandle.unref();
+  const instanceId=randomUUID();
+  startHidden('wsl.exe',['-d',distro,'-u',user,'--exec','env','WSL_CONSOLE_INSTANCE_ID='+instanceId,node,wslPath(join(root,'server.mjs')),wslPath(join(root,'config.json'))]);
   for(let i=0;i<60&&!backend;i++){await wait(500);backend=await get(localUrl+'/api/viewer');}
-  if(backend?.application!=='wsl-console')throw Error('LOCAL_VIEWER_START_FAILED'+(startError?': '+startError.code:''));owned=backend.instanceId===instanceId;
+  if(backend?.application!=='wsl-console')throw Error('LOCAL_VIEWER_START_FAILED');owned=backend.instanceId===instanceId;
  }else owned=!!(previous?.backend.owned&&previous.backend.pid===backend.pid&&previous.backend.instanceId===backend.instanceId);
  const addresses=physicalAddresses();
  const relays=(previous?.relays||[]).filter(item=>item.owned&&!addresses.some(address=>address.address===item.address)).map(item=>({...item,stale:true}));
@@ -49,9 +57,9 @@ export async function startWslConsole(options={}){
   const url='http://'+entry.address+':'+port,existing=await get(url+'/__wsl_console_lan');
   if(existing){if(existing.application!=='wsl-console-lan'||existing.upstreamPort!==port||existing.address!==entry.address||existing.prefix!==entry.prefix)throw Error('LAN_PORT_IN_USE');relays.push({...entry,...existing,owned:previous?.relays.some(item=>item.instanceId===existing.instanceId&&item.owned)||false});await save(record);continue;}
   const instanceId=randomUUID(),options={address:entry.address,prefix:entry.prefix,port,upstreamPort:port,instanceId};
-  let startError;const child=spawn(process.execPath,[join(root,'lan-relay.mjs'),JSON.stringify(options)],{detached:true,stdio:'ignore',windowsHide:true});child.once('error',error=>{startError=error});child.unref();
+  startHidden(process.execPath,[join(root,'lan-relay.mjs'),JSON.stringify(options)]);
   let ready;for(let i=0;i<30&&!ready;i++){await wait(100);ready=await get(url+'/__wsl_console_lan');}
-  if(ready?.instanceId!==instanceId)throw Error('LAN_RELAY_START_FAILED: '+url+(startError?' ('+startError.code+')':''));
+  if(ready?.instanceId!==instanceId)throw Error('LAN_RELAY_START_FAILED: '+url);
   relays.push({...entry,...ready,owned:true});await save(record);
  }
  await save(record);return {localUrl,lanUrls:relays.filter(item=>!item.stale).map(item=>'http://'+item.address+':'+port),firewallChanged:false,automaticStartup:false};

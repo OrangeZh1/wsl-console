@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {isExpiredHistory,startHistoryMaintenance} from './retention.mjs';
 import {failureDetails} from './failure.mjs';
+import {readResources} from './resources.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
 const viewerInstance=/^[a-f0-9-]{36}$/i.test(process.env.WSL_CONSOLE_INSTANCE_ID||'')?process.env.WSL_CONSOLE_INSTANCE_ID:randomUUID();
@@ -52,6 +53,7 @@ export async function createViewer(config){
    if(!/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(req.headers.host||''))return send(403,{error:'LOCAL_ACCESS_ONLY'});
    const url=new URL(req.url,'http://localhost');
    if(url.pathname==='/api/viewer')return send(200,{application:'wsl-console',pid:process.pid,instanceId:viewerInstance,platform:process.platform});
+   if(url.pathname==='/api/resources')return send(200,await readResources());
    const assets={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],'/favicon.svg':['favicon.svg','image/svg+xml'],'/icons.svg':['icons.svg','image/svg+xml'],'/icons.js':['icons.js','text/javascript; charset=utf-8']};
    if(assets[url.pathname]){const [file,type]=assets[url.pathname];return send(200,await readFile(join(root,'public',file)),type);}
    if(url.pathname==='/api/runs'){

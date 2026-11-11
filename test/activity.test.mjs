@@ -26,3 +26,12 @@ test('invalid task identity fails before creating a directory',async t=>{
  await assert.rejects(createReporter(root,{id:'invalid',taskKey:'',steps:[{id:'a'}]}),/TASK_KEY_INVALID/);
  const {readdir}=await import('node:fs/promises');assert.deepEqual(await readdir(root),[]);
 });
+
+test('repeated running updates retain the phase start and progress while a real retry starts a new attempt',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'wsl-stable-timing-'));t.after(()=>rm(root,{recursive:true,force:true}));const reporter=await createReporter(root,{id:'same-run',steps:[{id:'work'}]});
+ const initial='2026-11-10T12:00:00.000Z';await reporter.step('work',{status:'running',startedAt:initial,activity:'第一项',activityUpdatedAt:initial,tests:{pass:2,fail:0,skipped:0}});
+ await reporter.step('work',{status:'running',detail:'仍在执行'});await reporter.step('work',{status:'running',startedAt:'2026-11-10T12:05:00.000Z',activity:'下一项',seconds:0,finishedAt:'2026-11-10T12:04:00.000Z',exitCode:1});
+ const running=await reporter.snapshot();assert.equal(running.startedAt,initial);assert.equal(running.steps[0].startedAt,initial);assert.equal(running.steps[0].activity,'下一项');assert.equal(running.steps[0].activityUpdatedAt,initial);assert.equal(running.steps[0].tests.pass,2);for(const key of ['seconds','finishedAt','exitCode'])assert.equal(running.steps[0][key],undefined,key);
+ await reporter.step('work',{status:'failed',exitCode:1,error:'真实失败'});const failure=(await reporter.snapshot()).steps[0];const retryStart='2026-11-10T12:10:00.000Z';await reporter.step('work',{status:'running',startedAt:retryStart});const retry=await reporter.snapshot();assert.equal(retry.steps[0].startedAt,retryStart);assert.equal(retry.startedAt,initial);assert.equal(retry.steps[0].activity,undefined);assert.equal(retry.steps[0].error,undefined);assert.equal(retry.steps[0].attempts.length,1);assert.equal(retry.steps[0].attempts[0].error,'真实失败');assert.equal(retry.steps[0].attempts[0].startedAt,initial);assert.equal(retry.steps[0].attempts[0].finishedAt,failure.finishedAt);assert.equal(retry.steps[0].attempts[0].seconds,failure.seconds);
+ const second=await createReporter(root,{id:'new-run',taskKey:'same-task',steps:[{id:'work'}]});await second.step('work',{status:'running',startedAt:retryStart});assert.equal((await second.snapshot()).startedAt,retryStart);
+});
