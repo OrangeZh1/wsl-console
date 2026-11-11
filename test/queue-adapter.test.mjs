@@ -55,12 +55,12 @@ test('input digests have deterministic ordering and reject missing or duplicate 
 async function fixture(t,mode='pass'){
  const root=await mkdtemp(join(tmpdir(),'wsl-queue-adapter-v2-'));t.after(()=>rm(root,{recursive:true,force:true}));const file=join(root,'worker.mjs'),receiptFile=join(root,'receipt.json');
  const source=[
- "import{writeFile,rename,readFile,stat}from'node:fs/promises';",
+ "import{writeFile,rename,readFile,stat}from'node:fs/promises';import{performance}from'node:perf_hooks';",
  "const [file,mode]=process.argv.slice(2),base={format:'wsl-job-result-v2',dispatchJobId:process.env.WSL_CONSOLE_JOB_ID,attemptId:process.env.WSL_CONSOLE_ATTEMPT_ID,deviceId:process.env.WSL_CONSOLE_DEVICE_ID,inputDigest:process.env.WSL_CONSOLE_INPUT_DIGEST,id:'actual-run'};",
  "async function save(value){await writeFile(file+'.tmp',JSON.stringify(value));await rename(file+'.tmp',file)}",
  "if(mode==='silent')process.exit(0);",
  "if(mode==='wait'){await save({...base,status:'blocked',finished:true,commandStarted:false,reportedAt:new Date().toISOString(),admission:{decision:'wait',reason:'resource admission'}});process.exit(75)}",
- "const startedAt=new Date().toISOString();await save({...base,status:'running',finished:false,commandStarted:true,startedAt,heartbeatAt:startedAt});if(mode==='pass'){const deadline=Date.now()+5000;for(;;){try{await stat(file+'.ack');break}catch{}if(Date.now()>deadline)throw Error('no progress acknowledgement');await new Promise(ok=>setTimeout(ok,25));}}",
+ "const startedAt=new Date().toISOString();await save({...base,status:'running',finished:false,commandStarted:true,startedAt,heartbeatAt:startedAt});if(mode==='pass'){const deadline=performance.now()+5000;for(;;){try{await stat(file+'.ack');break}catch{}if(performance.now()>deadline)throw Error('no progress acknowledgement');await new Promise(ok=>setTimeout(ok,25));}}",
  "if(mode==='changed')await writeFile(new URL(import.meta.url),(await readFile(new URL(import.meta.url),'utf8'))+'\\n// changed');",
  "await save({...base,status:'passed',finished:true,commandStarted:true,startedAt,finishedAt:new Date().toISOString()});"
  ].join('\n');

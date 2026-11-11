@@ -33,7 +33,7 @@ export function validateExecutionReceipt(receipt,binding,exitCode,{terminal=true
  if(receipt.commandStarted===false){
   if(!terminal||receipt.finished!==true||!['queued','blocked'].includes(receipt.status)||own(receipt,'startedAt')||receipt.admission?.decision!=='wait'||typeof receipt.admission.reason!=='string'||!receipt.admission.reason.trim()||receipt.admission.reason.length>2000||![0,75].includes(exitCode))throw Error('EXECUTION_ADMISSION_RECEIPT_INVALID');
   const reported=normalized(receipt.reportedAt);if(!validWindow(reported))throw Error('EXECUTION_RECEIPT_TIME_INVALID');
-  return {...wait(receipt.admission.reason.trim(),'admission'),admissionEvidence:{...common,runId:receipt.id,reportedAt:new Date(reported).toISOString(),sourceReportedAt:receipt.reportedAt,exitCode}};
+  const retry=receipt.admission.retryAfterMs;return {...wait(receipt.admission.reason.trim(),'admission'),...(Number.isSafeInteger(retry)&&retry>=1000&&retry<=30000?{retryAfterMs:retry}:{}),admissionEvidence:{...common,runId:receipt.id,reportedAt:new Date(reported).toISOString(),sourceReportedAt:receipt.reportedAt,exitCode}};
  }
  if(receipt.commandStarted!==true)throw Error('EXECUTION_RECEIPT_START_UNCONFIRMED');
  const started=normalized(receipt.startedAt);if(!validWindow(started))throw Error('EXECUTION_RECEIPT_TIME_INVALID');
