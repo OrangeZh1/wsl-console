@@ -1,0 +1,41 @@
+name: 手动验收
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: 完整单元测试
+        run: node --test --test-reporter=tap --test-concurrency=1 test/*.test.mjs
+      - name: 准备独立浏览器工具
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/wsl-console-browsers
+        run: |
+          npm install --prefix "$RUNNER_TEMP/wsl-console-browser" --no-package-lock --no-audit --no-fund playwright@1.65.0
+          "$RUNNER_TEMP/wsl-console-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: 完整界面与阶段排队浏览器验收
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/wsl-console-browsers
+        run: |
+          node test/browser.check.mjs --playwright-root "$RUNNER_TEMP/wsl-console-browser" --output "$RUNNER_TEMP/wsl-console-evidence/full"
+          node test/workflow-wait.browser.check.mjs --playwright-root "$RUNNER_TEMP/wsl-console-browser" --output "$RUNNER_TEMP/wsl-console-evidence/workflow-wait"
+      - name: 保留测试数据验收证据
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-evidence
+          path: ${{ runner.temp }}/wsl-console-evidence
+          if-no-files-found: ignore
+          retention-days: 7

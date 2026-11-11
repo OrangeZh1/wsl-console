@@ -1,13 +1,27 @@
 const $=id=>document.getElementById(id);
 const labels={queued:'等待执行',running:'执行中',passed:'已通过',failed:'未通过',blocked:'受阻',cancelled:'已取消',interrupted:'已中断'};
-const statusIcon=status=>{const label=labels[status]||'未知状态',icon=wslIcon('status-'+(Object.hasOwn(labels,status)?status:'interrupted'),{label,className:'symbol '+status}),title=document.createElementNS('http://www.w3.org/2000/svg','title');title.textContent=label;icon.append(title);return icon};
+const taskLabel=status=>status==='running'?'进行中':labels[status]||status;
+const stageLabel=step=>step.status==='running'&&!step.command?.length?(stageQueue(run)?'阶段排队':'进行中'):labels[step.status]||step.status;
+const statusIcon=(status,override)=>{const label=override||labels[status]||'未知状态',icon=wslIcon('status-'+(Object.hasOwn(labels,status)?status:'interrupted'),{label,className:'symbol '+status}),title=document.createElementNS('http://www.w3.org/2000/svg','title');title.textContent=label;icon.append(title);return icon};
 let runs=[],taskGroups=[],run=null,selectedStep=null,offset=0,logText='',selection=0,logBusy=null,manualBusy=false,metadataRequest=null,activeFilter=null;
 let activityViewKey=null;
 let failureKey=null,failureGeneration=0;
 let mobileTasksOpen=false,stageOptionsSignature=null;
 let resourcesBusy=false;
 const rememberedSteps=new Map(),rememberedRuns=new Map(),rememberedTaskRuns=new Map();
-const filterNames={running:'执行中',queued:'等待',history:'历史与其他'},filterOf=record=>['running','queued'].includes(record.status)?record.status:'history';
+const filterNames={running:'进行中',queued:'待启动',history:'历史与其他'},filterOf=record=>['running','queued'].includes(record.status)?record.status:'history';
+function hasRunningCommand(record){return (record?.steps||[]).some(step=>step.status==='running'&&step.command?.length)}
+function stageQueue(record){
+ if(record?.status!=='running'||hasRunningCommand(record))return null;
+ const reason=typeof record.queueReason==='string'?record.queueReason.trim():'',allSteps=record.steps||[];
+ if(reason)return {reason,steps:allSteps.filter(step=>step.status==='queued'&&step.detail?.trim()===reason)};
+ // Compatibility with the existing executor's exact metadata contract, not a
+ // guess from logs or keywords. Future queued steps do not establish waiting.
+ const steps=allSteps.filter(step=>step.status==='queued'&&step.detail?.trim()&&allSteps.some(flow=>flow.status==='running'&&!flow.command?.length&&flow.activity==='阶段等待资源：'+step.detail+'；本阶段命令尚未启动'));
+ return steps.length?{reason:steps[0].detail,steps:steps.filter(step=>step.detail===steps[0].detail)}:null;
+}
+const runLabel=record=>stageQueue(record)?'阶段排队':taskLabel(record.status);
+function groupStageQueue(group){return group.running.some(hasRunningCommand)?null:group.running.map(stageQueue).find(Boolean)||null}
 const taskKeyOf=record=>record.taskKey?'key:'+record.taskKey:'legacy:'+JSON.stringify([[...(record.projects||[])].sort(),record.name]);
 const groupForRun=id=>taskGroups.find(group=>group.runs.some(record=>record.id===id));
 const runTime=record=>record.startedAt||record.enqueuedAt||record.updatedAt||record.finishedAt||'';
@@ -38,29 +52,31 @@ async function refreshResources(){if(resourcesBusy)return;resourcesBusy=true;try
 function selected(){return run?.steps.find(step=>step.id===selectedStep)}
 function renderTasks(){
  const container=$('tasks'),scroll=container.scrollTop,focusedFilter=document.activeElement?.getAttribute?.('data-filter');container.replaceChildren();
- const tabs=[['running','执行'],['queued','等待'],['history','历史']].map(([filter,label])=>{const count=taskGroups.filter(item=>filterOf(item)===filter).length,button=node('button',label+' '+count,'task-tab'+(activeFilter===filter?' selected':''));button.type='button';button.setAttribute('data-filter',filter);button.setAttribute('aria-pressed',String(activeFilter===filter));button.setAttribute('aria-label',filterNames[filter]+'任务，'+count+' 个');button.addEventListener('click',()=>chooseFilter(filter));return button});$('task-count').replaceChildren(...tabs);if(focusedFilter)tabs.find(button=>button.getAttribute('data-filter')===focusedFilter)?.focus();
+ const tabs=[['running','进行'],['queued','待启动'],['history','历史']].map(([filter,label])=>{const count=taskGroups.filter(item=>filterOf(item)===filter).length,button=node('button',label+' '+count,'task-tab'+(activeFilter===filter?' selected':''));button.type='button';button.setAttribute('data-filter',filter);button.setAttribute('aria-pressed',String(activeFilter===filter));button.setAttribute('aria-label',filterNames[filter]+'任务，'+count+' 个');button.addEventListener('click',()=>chooseFilter(filter));return button}),waitingCount=taskGroups.filter(group=>groupStageQueue(group)).length,waitingNote=node('span','阶段排队 '+waitingCount,'stage-queue-count');waitingNote.id='stage-queue-count';waitingNote.setAttribute('title','已开始的任务中，当前阶段由执行端明确上报等待；任务仍归进行中。');$('task-count').replaceChildren(...tabs,waitingNote);if(focusedFilter)tabs.find(button=>button.getAttribute('data-filter')===focusedFilter)?.focus();
  const records=taskGroups.filter(item=>filterOf(item)===activeFilter),selectedGroup=run&&groupForRun(run.id);
  if(selectedGroup&&filterOf(selectedGroup)!==activeFilter)container.append(node('p','当前任务已转入'+filterNames[filterOf(selectedGroup)]+'，继续保留其详情。','task-notice'));
  for(const group of records){
-   const record=group.current,project=group.projects.join(' / ')||'未指定项目',meta=(group.status==='queued'?'入队 '+fmt(record.enqueuedAt)+(record.queuePosition?' · 第 '+record.queuePosition+' 位':' · 顺序未上报'):(labels[group.status]||group.status)+' · '+duration(record))+' · '+group.runs.length+' 次记录'+(group.running.length>1?' · '+group.running.length+' 个执行中':'');
-   const button=node('button','','task'+(group.key===selectedGroup?.key?' selected':''));button.type='button';button.setAttribute('aria-current',group.key===selectedGroup?.key?'true':'false');button.setAttribute('title',group.name+'\n'+project+'\n'+meta);button.setAttribute('aria-label',group.name+'，'+(labels[group.status]||group.status)+'，'+project+'，'+meta);
-   const heading=node('span','','task-title'),name=node('strong',record.name,'task-name'),symbol=statusIcon(group.status);name.setAttribute('title',record.name);heading.append(symbol,name);
+   const record=group.current,waiting=groupStageQueue(group),displayState=waiting?'阶段排队':taskLabel(group.status),project=group.projects.join(' / ')||'未指定项目',meta=(group.status==='queued'?'入队 '+fmt(record.enqueuedAt)+(record.queuePosition?' · 第 '+record.queuePosition+' 位':' · 顺序未上报'):displayState+' · '+duration(record))+' · '+group.runs.length+' 次记录'+(group.running.length>1?' · '+group.running.length+' 个进行中':'');
+   const button=node('button','','task'+(group.key===selectedGroup?.key?' selected':''));button.type='button';button.setAttribute('aria-current',group.key===selectedGroup?.key?'true':'false');button.setAttribute('title',group.name+'\n'+project+'\n'+meta);button.setAttribute('aria-label',group.name+'，'+taskLabel(group.status)+'，'+project+'，'+meta);
+   const heading=node('span','','task-title'),name=node('strong',record.name,'task-name'),symbol=statusIcon(waiting?'queued':group.status,displayState);name.setAttribute('title',record.name);heading.append(symbol,name);if(waiting)heading.append(node('span','阶段排队','task-wait-badge'));
    const projectNode=node('span',project,'task-project'),timeNode=node('span',meta,'task-time');projectNode.setAttribute('title',project);timeNode.setAttribute('title',meta);button.append(heading,projectNode,timeNode);
-   if(group.status==='running'){const stages=group.running.flatMap(item=>item.steps.filter(step=>step.status==='running')),text=stages.length?stages.map(step=>step.label+(step.activity?'：'+step.activity:'')).join('；'):'当前未上报活动阶段',activity=node('span',text,'task-activity');activity.setAttribute('title',text);button.append(activity);button.setAttribute('aria-label',button.getAttribute('aria-label')+'，'+text);}
+   if(waiting){const text=(waiting.steps.length?waiting.steps.map(step=>step.label).join('、')+'：':'')+waiting.reason;button.append(node('span',text,'task-stage-queue'));button.setAttribute('aria-label',group.name+'，阶段排队，'+project+'，'+text);}
+   else if(group.status==='running'){const stages=group.running.flatMap(item=>item.steps.filter(step=>step.status==='running')),text=stages.length?stages.map(step=>step.label+(step.activity?'：'+step.activity:'')).join('；'):'当前未上报活动阶段',activity=node('span',text,'task-activity');activity.setAttribute('title',text);button.append(activity);button.setAttribute('aria-label',button.getAttribute('aria-label')+'，'+text);}
    button.addEventListener('click',()=>chooseTask(group.key));container.append(button);
  }if(!records.length)container.append(node('p',taskGroups.length?'暂无'+filterNames[activeFilter]+'任务':'暂无任务记录','task-empty'));container.scrollTop=scroll;
 }
 function renderSteps(){
  const container=$('steps'),scroll=container.scrollTop;container.replaceChildren();
- for(const step of run?.steps||[]){const button=node('button','','step'+(step.id===selectedStep?' selected':''));button.type='button';button.setAttribute('aria-current',step.id===selectedStep?'step':'false');button.append(statusIcon(step.status),node('span',step.label,'label'),node('span',duration(step),'duration'));button.setAttribute('aria-label',step.label+'，'+labels[step.status]);button.addEventListener('click',()=>chooseStep(step.id));container.append(button)}
+ for(const step of run?.steps||[]){const button=node('button','','step'+(step.id===selectedStep?' selected':''));button.type='button';button.setAttribute('aria-current',step.id===selectedStep?'step':'false');button.append(statusIcon(stageQueue(run)&&step.status==='running'&&!step.command?.length?'queued':step.status,stageLabel(step)),node('span',step.label,'label'),node('span',duration(step),'duration'));button.setAttribute('aria-label',step.label+'，'+stageLabel(step));button.addEventListener('click',()=>chooseStep(step.id));container.append(button)}
  container.scrollTop=scroll;const steps=run?.steps||[];$('step-count').textContent=run?steps.filter(s=>s.status==='passed').length+' / '+steps.length:'—';
- $('mobile-step-count').textContent=$('step-count').textContent;const picker=$('stage-picker'),signature=JSON.stringify([run?.id,steps.map(step=>[step.id,step.label,step.status])]);if(signature!==stageOptionsSignature){const placeholder=node('option',steps.length?'选择执行阶段':'暂无阶段');placeholder.value='';placeholder.disabled=true;picker.replaceChildren(placeholder,...steps.map(step=>{const option=node('option',step.label+' · '+(labels[step.status]||step.status));option.value=step.id;return option}));stageOptionsSignature=signature;}picker.disabled=!steps.length;picker.value=selectedStep||'';const current=selected();picker.setAttribute('title',current?[current.label,labels[current.status],current.detail].filter(Boolean).join(' · '):'选择执行阶段');picker.setAttribute('aria-label',current?'执行阶段：'+current.label+'，'+(labels[current.status]||current.status):'选择执行阶段');picker.setAttribute('aria-description',current?.detail||'');
+ $('mobile-step-count').textContent=$('step-count').textContent;const picker=$('stage-picker'),signature=JSON.stringify([run?.id,!!stageQueue(run),steps.map(step=>[step.id,step.label,step.status])]);if(signature!==stageOptionsSignature){const placeholder=node('option',steps.length?'选择执行阶段':'暂无阶段');placeholder.value='';placeholder.disabled=true;picker.replaceChildren(placeholder,...steps.map(step=>{const option=node('option',step.label+' · '+stageLabel(step));option.value=step.id;return option}));stageOptionsSignature=signature;}picker.disabled=!steps.length;picker.value=selectedStep||'';const current=selected();picker.setAttribute('title',current?[current.label,stageLabel(current),current.detail].filter(Boolean).join(' · '):'选择执行阶段');picker.setAttribute('aria-label',current?'执行阶段：'+current.label+'，'+stageLabel(current):'选择执行阶段');picker.setAttribute('aria-description',current?.detail||'');
  if(!run){$('test-count').textContent='暂无测试统计';return;}
  const tests=steps.filter(s=>s.tests).reduce((a,s)=>{for(const key of ['pass','fail','skipped'])a[key]+=s.tests[key]||0;return a},{pass:0,fail:0,skipped:0});$('test-count').textContent='测试：'+tests.pass+' 通过 · '+tests.fail+' 失败 · '+tests.skipped+' 跳过';
 }
 function renderRun(){
- if(!run)return renderEmpty();const group=groupForRun(run.id);$('run-disclosures').hidden=false;$('source-info').hidden=false;$('run-name').textContent=group?.name||run.name;badge($('run-state'),run.status);$('projects').textContent=(run.projects||[]).join(' / ')||'未指定项目';
- const latest=group?.runs[0];$('run-context').textContent=latest&&run.id!==latest.id&&run.status!==latest.status?'正在查看较早记录，最近一次'+(labels[latest.status]||latest.status):'';
+ if(!run)return renderEmpty();const group=groupForRun(run.id),waiting=stageQueue(run);$('run-disclosures').hidden=false;$('source-info').hidden=false;$('run-name').textContent=group?.name||run.name;badge($('run-state'),waiting?'queued':run.status);$('run-state').textContent=runLabel(run);$('projects').textContent=(run.projects||[]).join(' / ')||'未指定项目';
+ $('stage-queue').hidden=!waiting;$('stage-queue-icon').replaceChildren(...(waiting?[wslIcon('clock',{className:'wait-icon'})]:[]));$('stage-queue-step').textContent=waiting?(waiting.steps.length?waiting.steps.map(step=>step.label).join('、'):'执行端未标注具体阶段'):'';$('stage-queue-reason').textContent=waiting?.reason||'';
+ const latest=group?.runs[0];$('run-context').textContent=latest&&run.id!==latest.id&&run.status!==latest.status?'正在查看较早记录，最近一次'+runLabel(latest):'';
  $('started').textContent=run.status==='queued'?'入队于 '+fmt(run.enqueuedAt):'开始于 '+fmt(run.startedAt);$('elapsed').textContent=run.status==='queued'?'尚未开始':'总耗时 '+duration(run);$('queue').textContent=run.status==='queued'?(run.queuePosition?'队列第 '+run.queuePosition+' 位':'队列顺序未上报'):'';
  $('environment').textContent=run.environment||'';$('versions').replaceChildren();
  for(const version of run.versions||[]){const row=node('div','','version-row');row.append(node('strong',version.name),node('span',version.branch||'工作区'),node('code',(version.head||'').slice(0,12)),node('span','源码快照 '+(version.sha256||'').slice(0,12)));$('versions').append(row)}
@@ -87,18 +103,18 @@ function renderActivity(){
  const details=$('activity'),content=$('activity-content'),focusedStep=document.activeElement?.getAttribute?.('data-activity-step'),jumps=[];content.replaceChildren();
  if(!run){details.hidden=true;$('activity-summary').textContent='';activityViewKey=null;return;}
  details.hidden=false;const key=run.id+'|'+run.status;if(activityViewKey!==key){details.open=run.status==='running'&&!compactMedia?.matches;activityViewKey=key;}
- const running=run.steps.filter(step=>step.status==='running');
+ const running=run.steps.filter(step=>step.status==='running'),commands=running.filter(step=>step.command?.length),active=running;
  if(run.status==='running'&&running.length){
-  $('activity-summary').textContent=running.length+' 个阶段执行中';
-  for(const step of running){
+  $('activity-summary').textContent=commands.length?running.length+' 个阶段进行中':'流程进行中';
+  for(const step of active){
    const row=node('div','','activity-row'),heading=node('div','','activity-heading'),jump=node('button','查看日志','activity-jump');jump.type='button';jump.setAttribute('data-activity-step',step.id);jump.setAttribute('aria-label','查看'+step.label+'日志');jump.addEventListener('click',()=>chooseStep(step.id));jumps.push(jump);heading.append(node('strong',step.label),jump);row.append(heading);
    const message=step.activity||[step.detail,formatCommand(step)].filter(Boolean).join(' · ')||'执行端尚未提供阶段说明。';row.append(node('p',message,'activity-message'));
    if(!step.activity)row.append(node('p','暂无细粒度进展上报','activity-fallback'));
    row.append(node('p','开始 '+fmt(step.startedAt)+' · 耗时 '+duration(step)+' · '+(step.activityUpdatedAt?'进展更新 '+fmt(step.activityUpdatedAt):'记录更新 '+fmt(run.updatedAt)),'activity-meta'));content.append(row);
   }
  }else{
-  const historical=groupForRun(run.id)?.current.id!==run.id&&!['running','queued'].includes(run.status);$('activity-summary').textContent=(historical?'历史记录 · ':'')+(run.status==='running'?'执行中 · 暂无活动阶段':labels[run.status]||run.status);
-  const failed=run.steps.filter(step=>step.status==='failed'),message=run.status==='queued'?'任务等待执行。'+(run.enqueuedAt?'入队 '+fmt(run.enqueuedAt)+'。':'')+(run.queuePosition?'队列第 '+run.queuePosition+' 位。':''):failed.length?'未通过阶段：'+failed.map(step=>step.label).join('、')+'。':run.status==='running'?'任务仍标记执行中，当前没有上报为执行中的阶段。':'当前没有正在执行的阶段。';
+  const historical=groupForRun(run.id)?.current.id!==run.id&&!['running','queued'].includes(run.status);$('activity-summary').textContent=(historical?'历史记录 · ':'')+(run.status==='running'?'进行中 · 暂无活动阶段':labels[run.status]||run.status);
+  const failed=run.steps.filter(step=>step.status==='failed'),message=run.status==='queued'?'任务等待执行。'+(run.enqueuedAt?'入队 '+fmt(run.enqueuedAt)+'。':'')+(run.queuePosition?'队列第 '+run.queuePosition+' 位。':''):failed.length?'未通过阶段：'+failed.map(step=>step.label).join('、')+'。':run.status==='running'?'任务流程仍标记进行中，当前没有上报正在执行的命令或阶段。':'当前没有正在执行的阶段。';
   content.append(node('p',message,'activity-message'));if(run.finishedAt)content.append(node('p','结束 '+fmt(run.finishedAt),'activity-meta'));
  }
  if(focusedStep)jumps.find(button=>button.getAttribute('data-activity-step')===focusedStep)?.focus();
@@ -107,7 +123,7 @@ function renderActivity(){
 function renderStep(){
  const step=selected();$('step-meta').replaceChildren();$('step-state').hidden=false;renderLogRefresh();
  if(!step){$('step-name').textContent=run?.error?'任务记录读取受阻':'此任务暂无阶段';$('step-detail').textContent=run?.error||'';badge($('step-state'),run?.status||'queued');$('command').hidden=true;$('command').textContent='';$('log-empty').textContent=run?.error||'执行端尚未上报阶段';return;}
- $('step-name').textContent=step.label;$('step-detail').textContent=step.detail;badge($('step-state'),step.status);
+ $('step-name').textContent=step.label;$('step-detail').textContent=step.detail;badge($('step-state'),stageQueue(run)&&step.status==='running'&&!step.command?.length?'queued':step.status);$('step-state').textContent=stageLabel(step);
  for(const value of [step.status==='queued'?'尚未开始':'耗时 '+duration(step),step.startedAt?'开始 '+fmt(step.startedAt):null,step.exitCode!==undefined?'退出码 '+step.exitCode:null,step.tests?'测试 '+step.tests.pass+' 通过 / '+step.tests.fail+' 失败 / '+step.tests.skipped+' 跳过':null].filter(Boolean))$('step-meta').append(node('span',value));
  $('command').hidden=!step.command?.length;$('command').textContent=formatCommand(step);
  if(!logText)$('log-empty').textContent=step.status==='running'?'正在等待新的日志输出':step.status==='queued'?'此阶段尚未开始，无执行日志':step.error||'此阶段尚未产生日志';
@@ -118,6 +134,7 @@ function renderLog(){const count=logLineCount(logText);$('log').textContent=logT
 function resetLog(){selection++;offset=0;logText='';logBusy=null;renderLog();$('log-empty').hidden=false;$('copy').disabled=true;$('copy').setAttribute('aria-busy','false');buttonLabel('copy','copy','复制日志');$('log-summary').textContent='实时日志';$('log-size').textContent='0 B';$('log-view').scrollTop=0;renderLogRefresh();}
 function renderEmpty(){
  clearFailure();
+ $('stage-queue').hidden=true;$('stage-queue-reason').textContent='';$('stage-queue-step').textContent='';$('stage-queue-icon').replaceChildren();
  const message='暂无'+filterNames[activeFilter]+'任务';$('run-name').textContent=message;$('run-state').className='badge';$('run-state').textContent='暂无任务';
  for(const id of ['projects','started','elapsed','queue','run-context','environment','updated'])$(id).textContent='';$('versions').replaceChildren();$('source-info').hidden=true;$('run-disclosures').hidden=true;renderActivity();$('history').value='';
  $('step-name').textContent=message;$('step-detail').textContent='选择其他分类查看任务记录。';$('step-state').hidden=true;$('step-state').textContent='';$('step-meta').replaceChildren();$('command').textContent='';$('command').hidden=true;$('log-empty').textContent=message+'，可切换其他分类。';renderTasks();renderSteps();renderHistory();
@@ -129,7 +146,7 @@ function chooseFilter(filter){
 }
 function chooseStep(id){if(id===selectedStep)return;selectedStep=id||null;if(run&&id)rememberedSteps.set(run.id,id);resetLog();renderSteps();renderStep();pollLog()}
 function chooseTask(key){const group=taskGroups.find(item=>item.key===key);if(!group)return;const target=run&&group.runs.some(item=>item.id===run.id)?run:group.runs.find(item=>item.id===rememberedTaskRuns.get(key))||group.current;chooseRun(target.id);if(compactMedia?.matches)mobileTasks(false);}
-function renderHistory(){const placeholder=node('option','选择运行记录');placeholder.value='';placeholder.disabled=true;const group=run&&groupForRun(run.id),history=$('history');$('history-caption').textContent='运行记录'+(group?'（'+group.runs.length+'）':'');history.replaceChildren(placeholder,...(group?.runs||[]).map(record=>{const option=node('option',fmt(record.startedAt||record.enqueuedAt)+' · '+(labels[record.status]||record.status));option.value=record.id;return option}));history.value=run?.id||'';history.disabled=!group;}
+function renderHistory(){const placeholder=node('option','选择运行记录');placeholder.value='';placeholder.disabled=true;const group=run&&groupForRun(run.id),history=$('history');$('history-caption').textContent='运行记录'+(group?'（'+group.runs.length+'）':'');history.replaceChildren(placeholder,...(group?.runs||[]).map(record=>{const option=node('option',fmt(record.startedAt||record.enqueuedAt)+' · '+runLabel(record));option.value=record.id;return option}));history.value=run?.id||'';history.disabled=!group;}
 function chooseRun(id){
  const record=runs.find(item=>item.id===id),group=record&&groupForRun(id);if(!record||!group)return;activeFilter=filterOf(group);rememberedRuns.set(activeFilter,id);rememberedTaskRuns.set(group.key,id);if(record.id===run?.id){run=record;renderRun();renderHistory();return;}clearFailure();run=record;selectedStep=null;resetLog();
  const remembered=rememberedSteps.get(id);const next=run.steps.find(s=>s.id===remembered)||run.steps.find(s=>s.status==='running')||run.steps.find(s=>s.status==='failed')||run.steps[0];

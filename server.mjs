@@ -41,6 +41,7 @@ export async function createViewer(config){
   const taskKey=record.taskKey||source.taskKey;
   const run={id:source.id,taskKey:typeof taskKey==='string'&&taskKey.trim()&&taskKey.length<=160?taskKey.trim():undefined,format:record.format,name:record.name||source.name||source.id,projects:record.projects||source.projects||[],environment:record.environment||source.environment||'WSL Linux',status:record.status,enqueuedAt:record.enqueuedAt,startedAt:record.startedAt||times[0],updatedAt:record.updatedAt,finishedAt:record.finishedAt,finished:record.finished===true,versions,steps};
   run.status=statusOf(run);
+  if(typeof record.queueReason==='string'&&record.queueReason.trim())run.queueReason=record.queueReason.trim();
   if(run.status==='failed'&&typeof record.error==='string')run.error=record.error;
   if(run.status==='queued'){delete run.startedAt;delete run.finishedAt;if(Number.isSafeInteger(record.queuePosition)&&record.queuePosition>0)run.queuePosition=record.queuePosition;}
   return run;
