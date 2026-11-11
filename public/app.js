@@ -12,6 +12,8 @@ let devices=[],deviceProtocol=false,deviceSnapshotCurrent=false,unassignedRunIds
 let logObservation=null,logObservedAt=null,logEmptySignature=null;
 let logCursor=null,logFallbackReadAt=0,logFallbackPending=false;
 let sourceViewSignature=null;
+let selectionInitialized=false,linkNotice='';
+const selectionStorageKey='wsl-console-selection-v1';
 const deviceRegistry=new Map(),deviceNodes=new Map(),taskNodes=new Map(),stepNodes=new Map(),filterNodes=new Map();
 const hostName=host=>host?.name||host?.computerName||host?.hostname||'未上报';
 const hostDescription=host=>host?[hostName(host),host.computerName&&host.computerName!==hostName(host)?'Windows '+host.computerName:null,host.hostname&&host.hostname!==hostName(host)?'主机名 '+host.hostname:null,host.distro||host.platform].filter(Boolean).join(' · '):'未上报';
@@ -145,7 +147,7 @@ function renderSteps(){
 function renderRun(){
  if(!run)return renderEmpty();const group=groupForRun(run.id),waiting=stageQueue(run),uncertain=run.status==='running'&&runWorkState(run)==='unconfirmed';$('run-disclosures').hidden=false;$('source-info').hidden=false;$('run-name').textContent=run.name;badge($('run-state'),uncertain?'unconfirmed':waiting?'queued':run.status);$('run-state').textContent=runLabel(run);$('projects').textContent='项目：'+((run.projects||[]).join(' / ')||'未指定项目');
  $('stage-queue').hidden=!waiting;$('stage-queue-icon').replaceChildren(...(waiting?[wslIcon('clock',{className:'wait-icon'})]:[]));$('stage-queue-step').textContent=waiting?(waiting.steps.length?waiting.steps.map(step=>step.label).join('、'):'执行端未标注具体阶段'):'';$('stage-queue-reason').textContent=waiting?.reason||'';
- const latest=group?.runs[0];$('run-context').textContent=[latest&&run.id!==latest.id?'正在查看较早记录，最近一次'+runLabel(latest):'',uncertain?'执行结果待确认 · 最后上报 '+fmt(run.observation?.lastHeartbeatAt)+(run.observation?.reason?' · '+run.observation.reason:''):''].filter(Boolean).join('；');
+ const latest=group?.runs[0];$('run-context').textContent=[linkNotice,latest&&run.id!==latest.id?'正在查看较早记录，最近一次'+runLabel(latest):'',uncertain?'执行结果待确认 · 最后上报 '+fmt(run.observation?.lastHeartbeatAt)+(run.observation?.reason?' · '+run.observation.reason:''):''].filter(Boolean).join('；');
  $('started').textContent=run.status==='queued'?'入队于 '+fmt(run.enqueuedAt):'开始于 '+fmt(run.startedAt);renderElapsed();$('queue').textContent=run.status==='queued'?(run.queuePosition?'队列第 '+run.queuePosition+' 位':'队列顺序未上报'):'';
  $('environment').textContent=run.environment||'';
  renderDeviceAssignment();
@@ -233,6 +235,7 @@ function renderEmpty(){
  $('stage-queue').hidden=true;$('stage-queue-reason').textContent='';$('stage-queue-step').textContent='';$('stage-queue-icon').replaceChildren();
  const message='暂无'+filterNames[activeFilter]+'任务';$('run-name').textContent=message;$('run-state').className='badge';$('run-state').textContent='暂无任务';
  for(const id of ['projects','started','elapsed','queue','run-context','environment','updated','executor','executor-info','device-assignment'])$(id).textContent='';$('versions').replaceChildren();$('source-info').hidden=true;$('run-disclosures').hidden=true;renderActivity();$('history').value='';
+ $('run-context').textContent=linkNotice;
  $('step-name').textContent=message;$('step-detail').textContent='选择其他分类查看任务记录。';$('step-state').hidden=true;$('step-state').textContent='';$('step-meta').replaceChildren();$('command').textContent='';$('command').hidden=true;$('log-empty').textContent=message+'，可切换其他分类。';renderTasks();renderSteps();renderHistory();
 }
 function chooseFilter(filter){
@@ -240,23 +243,33 @@ function chooseFilter(filter){
  const records=taskGroups.filter(item=>filterOf(item)===filter),current=run&&groupForRun(run.id),remembered=runs.find(item=>item.id===rememberedRuns.get(filter)),target=current&&filterOf(current)===filter?run:remembered&&records.some(group=>group.runs.includes(remembered))?remembered:records[0]?.current;
  if(target)chooseRun(target.id);else{run=null;selectedStep=null;resetLog();renderEmpty();}
 }
-function chooseStep(id,explicit=true){if(run&&id&&explicit)rememberedSteps.set(run.id,id);if(id===selectedStep)return;selectedStep=id||null;resetLog();renderSteps();renderStep();pollLog()}
+function chooseStep(id,explicit=true){if(id&&(!run||!run.steps.some(step=>step.id===id)))return;const hadNotice=explicit&&Boolean(linkNotice);if(explicit)linkNotice='';if(run&&id&&explicit)rememberedSteps.set(run.id,id);if(id===selectedStep){if(explicit)syncSelectionLocation();if(hadNotice)renderRun();return;}selectedStep=id||null;resetLog();renderSteps();renderStep();pollLog();if(explicit)syncSelectionLocation();if(hadNotice)renderRun();}
 function chooseTask(key){const group=taskGroups.find(item=>item.key===key);if(!group)return;const target=run&&group.runs.some(item=>item.id===run.id)?run:group.runs.find(item=>item.id===rememberedTaskRuns.get(key))||group.current;chooseRun(target.id);if(compactMedia?.matches)mobileTasks(false);}
 function renderHistory(){const placeholder=node('option','选择运行记录');placeholder.value='';placeholder.disabled=true;const group=run&&groupForRun(run.id),history=$('history');$('history-caption').textContent='运行记录'+(group?'（'+group.runs.length+'）':'');history.replaceChildren(placeholder,...(group?.runs||[]).map(record=>{const option=node('option',fmt(record.startedAt||record.enqueuedAt)+' · '+runLabel(record)+(record.executor?' · '+hostName(record.executor):hostProtocol?' · 主机未记录':''));option.value=record.id;return option}));history.value=run?.id||'';history.disabled=!group;}
-function chooseRun(id){
- const record=runs.find(item=>item.id===id),group=record&&groupForRun(id);if(!record||!group)return;activeFilter=filterOf(group);rememberedRuns.set(activeFilter,id);rememberedTaskRuns.set(group.key,id);if(record.id===run?.id){run=record;renderRun();renderHistory();return;}clearFailure();run=record;selectedStep=null;resetLog();
+function chooseRun(id,{updateUrl=true}={}){
+ const record=runs.find(item=>item.id===id),group=record&&groupForRun(id);if(!record||!group)return;if(updateUrl)linkNotice='';activeFilter=filterOf(group);rememberedRuns.set(activeFilter,id);rememberedTaskRuns.set(group.key,id);if(record.id===run?.id){run=record;renderRun();renderHistory();if(updateUrl)syncSelectionLocation();return;}clearFailure();run=record;selectedStep=null;resetLog();
  const remembered=rememberedSteps.get(id);const next=run.steps.find(s=>s.id===remembered)||preferredStep(run);
- if(next)chooseStep(next.id,false);renderRun();renderHistory();
+ if(next)chooseStep(next.id,false);renderRun();renderHistory();if(updateUrl)syncSelectionLocation();
+}
+function syncSelectionLocation(){
+ if(!run)return;const selection={runId:run.id,stepId:selectedStep};try{if(typeof location!=='undefined'&&typeof globalThis.history?.replaceState==='function'){const url=new URL(location.href);url.searchParams.set('run',run.id);if(selectedStep)url.searchParams.set('step',selectedStep);else url.searchParams.delete('step');if(url.href!==location.href)globalThis.history.replaceState(null,'',url.href);}}catch{}try{if(typeof localStorage!=='undefined')localStorage.setItem(selectionStorageKey,JSON.stringify(selection));}catch{}
+}
+function restoreInitialSelection(){
+ let requested=null,saved=null;try{if(typeof location!=='undefined'){const params=new URL(location.href).searchParams;if(params.has('run')||params.has('step'))requested={runId:params.get('run'),stepId:params.get('step')};}}catch{}try{if(typeof localStorage!=='undefined')saved=JSON.parse(localStorage.getItem(selectionStorageKey)||'null');}catch{}
+ let target=requested&&runs.find(record=>record.id===requested.runId),stepId;
+ if(requested){if(!target)linkNotice=requested.runId?'链接中的运行记录不存在、已移除或已过期：'+String(requested.runId).slice(0,120):'链接包含阶段但未指定运行记录，请选择要查看的运行。';else if(requested.stepId&&!target.steps.some(step=>step.id===requested.stepId))linkNotice='链接中的阶段不存在或已移除：'+String(requested.stepId).slice(0,120)+'；可在此运行中选择其他阶段。';else stepId=requested.stepId||undefined;}
+ if(!target&&saved&&typeof saved.runId==='string'){target=runs.find(record=>record.id===saved.runId);if(target&&typeof saved.stepId==='string'&&target.steps.some(step=>step.id===saved.stepId))stepId=saved.stepId;}
+ if(!target)return false;if(stepId)rememberedSteps.set(target.id,stepId);chooseRun(target.id,{updateUrl:false});return true;
 }
 function preferredStep(record){return record.steps.find(step=>step.command?.length&&stageVisualState(step,record)==='running')||record.steps.find(step=>step.status==='running'&&step.command?.length)||record.steps.find(step=>step.status==='running')||record.steps.find(step=>step.status==='failed')||record.steps[0];}
 function applyMetadata(data){
  metadataCurrent=true;hostProtocol=Object.hasOwn(data,'viewerHost');if(hostProtocol)renderViewerHost(data.viewerHost);else renderViewerHost(viewerHost,false);
- runs=data.runs;acceptDevices(data);renderDevices();taskGroups=groupRuns(runs);const previous=selected();if(activeFilter===null)activeFilter=taskGroups.some(item=>item.status==='running')?'running':taskGroups.some(item=>item.status==='queued')?'queued':'history';
+ runs=data.runs;acceptDevices(data);renderDevices();taskGroups=groupRuns(runs);if(!selectionInitialized){selectionInitialized=true;if(restoreInitialSelection()){renderHistory();connection('实时连接','connected');return;}}const previous=selected();if(activeFilter===null)activeFilter=taskGroups.some(item=>item.status==='running')?'running':taskGroups.some(item=>item.status==='queued')?'queued':'history';
  if(run){
   const latest=runs.find(record=>record.id===run.id);
   if(latest){run=latest;const preferred=preferredStep(run),current=selected();if(selectedStep&&!current){selectedStep=preferred?.id||null;resetLog();}else if(!rememberedSteps.has(run.id)&&preferred?.status==='running'&&preferred.command?.length&&selectedStep!==preferred.id&&(!current||current.status!=='running'||!current.command?.length||stageVisualState(current)!=='running')){selectedStep=preferred.id;resetLog();}else if(previous?.startedAt!==current?.startedAt||(previous?.attempts?.length||0)!==(current?.attempts?.length||0)){resetLog();}renderRun();}
   else{connection('当前任务已从数据源移除，保留已读取结果','warning');renderTasks();return;}
- }else{const records=taskGroups.filter(item=>filterOf(item)===activeFilter),remembered=runs.find(item=>item.id===rememberedRuns.get(activeFilter)),target=remembered&&records.some(group=>group.runs.includes(remembered))?remembered:records[0]?.current;if(target)chooseRun(target.id);else renderEmpty();}
+ }else{const records=taskGroups.filter(item=>filterOf(item)===activeFilter),remembered=runs.find(item=>item.id===rememberedRuns.get(activeFilter)),target=remembered&&records.some(group=>group.runs.includes(remembered))?remembered:records[0]?.current;if(target)chooseRun(target.id,{updateUrl:false});else renderEmpty();}
  renderHistory();
  connection('实时连接','connected');
 }
