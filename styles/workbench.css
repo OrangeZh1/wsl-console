@@ -6,8 +6,8 @@
   --surface: #ffffff;
   --subtle: #f8fafc;
   --text: #253044;
-  --muted: #65748b;
-  --faint: #8390a3;
+  --muted: #56667d;
+  --faint: #5b6b82;
   --line: #e1e6ee;
   --accent: #2864c7;
   --accent-soft: #edf3fc;
@@ -357,7 +357,7 @@ main {
 .host-icon { display: block; flex: none; width: 13px; height: 13px; }
 .host-caption { flex: none; font-size: 10px; }
 .host-name { min-width: 0; overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; }
-.host-location { flex: none; padding: 0 4px; border-radius: 4px; color: #657b98; background: #e9eff7; font-size: 9px; line-height: 15px; }
+.host-location { flex: none; padding: 0 4px; border-radius: 4px; color: var(--muted); background: #e9eff7; font-size: 9px; line-height: 15px; }
 .host-badge.remote { color: #5d587c; }
 .host-badge.unknown { color: var(--muted); background: #f3f5f8; }
 .host-badge.unconfirmed { color: var(--muted); border-color: var(--line); }
