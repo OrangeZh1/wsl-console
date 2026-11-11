@@ -23,7 +23,7 @@ function Write-WindowsResourceFrame {
  $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($Frame|ConvertTo-Json -Depth 6 -Compress)+[Environment]::NewLine)
  $stream=[IO.File]::Open($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
  try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
- if([IO.File]::Exists($Path)){[IO.File]::Replace($temporary,$Path,$null)}else{[IO.File]::Move($temporary,$Path)}
+ if([IO.File]::Exists($Path)){[IO.File]::Replace($temporary,$Path,[System.Management.Automation.Language.NullString]::Value)}else{[IO.File]::Move($temporary,$Path)}
 }
 if($AsLibrary){return}
 
