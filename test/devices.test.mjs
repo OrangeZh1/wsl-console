@@ -46,6 +46,6 @@ test('SSH prober uses pinned keys, ignores secrets and preserves last successful
  const device={id:'remote',name:'远程',computerName:'B',transport:'ssh',ssh:{host:'192.0.2.10',user:'qa',identityFile:join(root,'key'),knownHostsFile:join(root,'known_hosts')}};
  const {args}=probeArguments(device);for(const value of ['StrictHostKeyChecking=yes','BatchMode=yes','IdentitiesOnly=yes','ConnectionAttempts=1'])assert.ok(args.includes(value));
  const first=await sampleDevice(device,root,async()=>JSON.stringify({computerName:'B',token:'never-export'}));assert.equal(first.connection,'reachable');
- const second=await sampleDevice(device,root,async()=>{throw Error('private credential details')});assert.equal(second.connection,'unreachable');assert.equal(second.lastSeenAt,first.lastSeenAt);assert.doesNotMatch(await readFile(join(root,'remote.json'),'utf8'),/private|credential|token|never-export/);
- const wrong=await sampleDevice(device,root,async()=>JSON.stringify({computerName:'C'}));assert.equal(wrong.error,'DEVICE_IDENTITY_MISMATCH');
+ const second=await sampleDevice(device,root,async()=>{throw Error('private credential details')});assert.equal(second.connection,'unknown');assert.equal(second.lastSeenAt,first.lastSeenAt);assert.doesNotMatch(await readFile(join(root,'remote.json'),'utf8'),/private|credential|token|never-export/);
+ const wrong=await sampleDevice(device,root,async()=>JSON.stringify({computerName:'C'}));assert.equal(wrong.error,'DEVICE_IDENTITY_MISMATCH');assert.equal(wrong.connection,'unknown');
 });

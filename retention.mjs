@@ -1,6 +1,7 @@
 import {lstat,realpath,readdir,readFile,writeFile,rename,rm} from 'node:fs/promises';
 import {resolve,dirname,join,sep} from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {timestamp} from './state.mjs';
 
 export const HISTORY_DAYS=30;
 export const HISTORY_CHECK_INTERVAL=60*60*1000;
@@ -9,19 +10,14 @@ const identifier=value=>typeof value==='string'&&/^[a-z0-9][a-z0-9_-]{0,79}$/i.t
 const hasReferences=value=>Array.isArray(value)?value.length>0:value&&typeof value==='object'?Object.keys(value).length>0:!!value;
 const protectedRecord=record=>!!(record.retain||record.protected||record.retention?.keep||hasReferences(record.recoveryRefs));
 
-function timestamp(value){
- if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(value))return null;
- const local=Date.parse(value.slice(0,19)+'Z'),parsed=Date.parse(value);
- return Number.isFinite(local)&&new Date(local).toISOString().slice(0,19)===value.slice(0,19)&&Number.isFinite(parsed)?parsed:null;
-}
 function finishedTime(record,now){
  const ended=timestamp(record?.finishedAt);if(ended===null||ended>now)return null;
  if(record.startedAt!==undefined){const started=timestamp(record.startedAt);if(started===null||started>ended)return null;}
  return record.finished===true&&(!record.status||terminal.has(record.status))&&Array.isArray(record.steps)&&record.steps.length>0&&record.steps.every(step=>step&&terminal.has(step.status))?ended:null;
 }
-export function isExpiredHistory(record,now=Date.now()){
+export function isExpiredHistory(record,now=Date.now(),{references=[],id=record?.id,directory,aliases=[]}={}){
  const ended=finishedTime(record,now);
- return ended!==null&&!protectedRecord(record)&&ended<now-HISTORY_DAYS*86400000;
+ return ended!==null&&!protectedRecord(record)&&!referencesRun(references,{id,directory,aliases})&&ended<now-HISTORY_DAYS*86400000;
 }
 
 async function checkedRoot(root){
@@ -54,10 +50,14 @@ async function ownedFiles(root,id,record){
  return true;
 }
 
-function referenceStrings(value){
+export function referenceStrings(value){
  if(typeof value==='string')return [value];
  if(value&&typeof value==='object')return Object.values(value).flatMap(referenceStrings);
  return [];
+}
+export function referencesRun(references,{id,directory,aliases=[]}={}){
+ const ids=[id,...aliases].filter(value=>typeof value==='string');
+ return references.some(value=>typeof value==='string'&&(ids.includes(value)||directory&&(value===directory||value.startsWith(directory+sep))));
 }
 
 export async function pruneHistory(config,{now=Date.now(),dryRun=false}={}){
@@ -75,7 +75,7 @@ export async function pruneHistory(config,{now=Date.now(),dryRun=false}={}){
   const directory=join(root,item.id),retain=reason=>result.retained.push({id:item.id,reason});
   const ended=finishedTime(item.record,now),expired=isExpiredHistory(item.record,now),successful=item.record.status==='passed'&&item.record.steps.every(step=>step.status==='passed'&&step.exitCode===0&&(step.tests?.fail??0)===0);
   if(ended===null||protectedRecord(item.record)||(!expired&&!successful)){retain('ACTIVE_RECENT_OR_PROTECTED');continue;}
-  if(references.some(value=>value===item.id||value===directory||value.startsWith(directory+sep))){retain('RECOVERY_REFERENCE');continue;}
+  if(referencesRun(references,{id:item.id,directory})){retain('RECOVERY_REFERENCE');continue;}
   if(configured.some(path=>path===directory||path.startsWith(directory+sep)||directory.startsWith(path+sep))){retain('CONFIGURED_SOURCE');continue;}
   try{
    if(!await ownedFiles(root,item.id,item.record)){retain('UNKNOWN_FILES');continue;}

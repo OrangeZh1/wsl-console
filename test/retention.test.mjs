@@ -52,6 +52,13 @@ test('expired configured history disappears from list, detail and logs while for
  assert.equal(await readFile(join(logs,'unit.log'),'utf8'),'formal retained log');assert.deepEqual(JSON.parse(await readFile(legacy,'utf8')),old);
 });
 
+test('recovery-referenced expired runs stay visible until their last reference is removed',async t=>{
+ const f=await fixture(t);await run(f,'old',{finishedAt:new Date(Date.now()-31*day).toISOString(),status:'failed',steps:[{id:'unit',status:'failed',exitCode:1}]});const holder=await run(f,'holder',{status:'running',finished:false,finishedAt:undefined,recoveryRefs:[{runId:'old'}],steps:[{id:'unit',status:'running'}]});
+ const server=await createViewer(f);await new Promise(ok=>server.listen(0,'127.0.0.1',ok));t.after(()=>new Promise(ok=>server.close(ok)));const url='http://127.0.0.1:'+server.address().port;
+ assert.ok((await(await fetch(url+'/api/runs')).json()).runs.some(run=>run.id==='old'));assert.equal((await fetch(url+'/api/runs/old')).status,200);assert.equal((await(await fetch(url+'/api/runs/old/steps/unit/log')).json()).availability,'available');
+ delete holder.record.recoveryRefs;await writeFile(join(holder.directory,'run.json'),JSON.stringify(holder.record));assert.equal((await fetch(url+'/api/runs/old')).status,404);assert.equal(await exists(join(f.runsRoot,'old/logs/unit.log')),true);
+});
+
 test('manual service maintenance checks at startup, repeats, and keeps one latest receipt',async t=>{
  const f=await fixture(t),oldDate=new Date(Date.now()-31*day).toISOString();await run(f,'startup',{finishedAt:oldDate});
  const errors=[],maintenance=startHistoryMaintenance(f,{intervalMs:30,onError:error=>errors.push(error.message)});t.after(()=>maintenance.stop());

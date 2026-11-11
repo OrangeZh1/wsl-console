@@ -5,5 +5,5 @@
   "license": "MIT",
   "type": "module",
   "engines": { "node": ">=24" },
-  "scripts": { "start": "node server.mjs", "build:styles": "node scripts/build-styles.mjs", "test": "node --test --test-reporter=tap test/*.test.mjs" }
+  "scripts": { "start": "node server.mjs", "build:styles": "node scripts/build-styles.mjs", "build": "node scripts/build-styles.mjs && node scripts/build-manifest.mjs", "test": "node --test --test-reporter=tap test/*.test.mjs" }
 }

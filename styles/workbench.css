@@ -19,6 +19,10 @@
   --radius: 8px;
   --page-gutter: 24px;
   --task-nav-width: 220px;
+  --scrollbar-size: 6px;
+  --scrollbar-thumb: #b7c4d5;
+  --scrollbar-hover: #8fa1b9;
+  --scrollbar-track: transparent;
   --blue: var(--accent);
   --ui-bg: var(--surface);
   --ui-bg-muted: var(--subtle);
@@ -35,7 +39,11 @@
   font-synthesis: none;
 }
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track); }
+*::-webkit-scrollbar { width: var(--scrollbar-size); height: var(--scrollbar-size); }
+*::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: var(--scrollbar-track); }
+*::-webkit-scrollbar-thumb { border-radius: var(--scrollbar-size); background: var(--scrollbar-thumb); }
+*::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 html, body { height: 100%; overflow: hidden; }
 body {
   display: flex;
@@ -210,6 +218,7 @@ h2 { font-size: 15px; line-height: 1.5; font-weight: 600; }
   text-overflow: ellipsis;
 }
 .device-select { border: 0; border-radius: 3px; padding: 0; background: transparent; text-align: left; }
+.device-select:disabled { opacity: 1; }
 .device-location, .device-state, .device-workload { flex: none; color: var(--muted); font-size: 9px; }
 .device-state.online { color: var(--success); }
 .device-state.unreachable { color: var(--warning); }
@@ -340,6 +349,7 @@ main {
 .badge.passed { color: var(--success); background: #e9f4ed; }
 .badge.failed { color: var(--danger); background: #fbecef; }
 .badge.queued, .badge.blocked, .badge.interrupted { color: var(--warning); background: #fbf2de; }
+.badge.unconfirmed { color: #76633f; background: #f3efe5; }
 .run-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; margin-top: 8px; color: var(--muted); font-size: 11px; line-height: 18px; }
 #run-context, #device-assignment { color: #60718a; font-size: 10px; overflow-wrap: anywhere; }
 #executor { display: inline-flex; min-width: 0; max-width: 100%; }
@@ -350,6 +360,7 @@ main {
 .host-location { flex: none; padding: 0 4px; border-radius: 4px; color: #657b98; background: #e9eff7; font-size: 9px; line-height: 15px; }
 .host-badge.remote { color: #5d587c; }
 .host-badge.unknown { color: var(--muted); background: #f3f5f8; }
+.host-badge.unconfirmed { color: var(--muted); border-color: var(--line); }
 .host-badge.recording { color: var(--muted); border-color: var(--line); background: var(--subtle); }
 .host-badge.cloud { color: #486581; background: #f1f6fa; }
 .task-executor .host-badge { padding: 0; border: 0; background: transparent; }
@@ -409,7 +420,8 @@ main {
 .step .duration { padding-top: 1px; color: var(--faint); font-size: 10px; line-height: 17px; font-variant-numeric: tabular-nums; }
 svg.symbol { display: block; flex: none; width: 16px; height: 16px; margin-top: 1px; overflow: visible; }
 .symbol.passed { color: var(--success); }
-.symbol.running { color: var(--accent); }
+.symbol.running { color: var(--accent); animation: workbench-spin 1s linear infinite; transform-origin: center; }
+.symbol.workflow, .symbol.unconfirmed { color: var(--muted); }
 .symbol.failed { color: var(--danger); }
 .symbol.blocked, .symbol.interrupted { color: var(--warning); }
 .symbol.queued, .symbol.cancelled { color: #8a98ab; }
@@ -429,22 +441,25 @@ svg.symbol { display: block; flex: none; width: 16px; height: 16px; margin-top: 
 .log-content { display: flex; align-items: stretch; min-width: 100%; width: max-content; padding: 12px 0; }
 #log-numbers { position: sticky; z-index: 1; left: 0; flex: none; min-width: 4ch; padding: 0 10px; border-right: 1px solid #2b394e; color: #8394ad; background: var(--log-bg); text-align: right; user-select: none; pointer-events: none; }
 #log { flex: none; padding: 0 16px 0 10px; }
-.log-empty { display: grid; place-items: center; height: 100%; color: #8a9cb4; font-size: 12px; }
+.log-empty { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 10px; height: 100%; padding: 20px; color: #8a9cb4; font-size: 12px; line-height: 1.65; text-align: center; }
+.log-empty > span { max-width: 620px; }
+.reuse-jump { padding: 4px 8px; border-color: #4e6482; color: #d1e1fa; background: #23344d; font-size: 11px; }
+.reuse-jump:hover:not(:disabled) { background: #304968; }
+.ci-source a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.source-recovery { margin-top: 5px; color: var(--warning); }
+.task.unconfirmed .task-activity { color: var(--muted); }
 .sidebar-footer, .log-bottom { display: flex; flex: none; align-items: center; height: 40px; min-height: 40px; gap: 10px; padding: 8px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; line-height: 20px; }
 .sidebar-footer { white-space: nowrap; }
 .log-bottom { justify-content: space-between; }
 .page-footer { display: flex; flex: none; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; padding-top: 10px; color: var(--faint); font-size: 10px; line-height: 16px; }
 .clipboard-fallback { position: fixed; left: -10000px; top: 0; width: 1px; height: 1px; opacity: 0; }
 
-:where(#tasks, #steps, .log-view, .command, .activity-content, .failure-content, .source-content, .devices, .device-resources, .failure-excerpt pre) { scrollbar-width: thin; scrollbar-color: #bfcbda transparent; }
-:where(#tasks, #steps, .log-view, .command, .activity-content, .failure-content, .source-content, .devices, .device-resources)::-webkit-scrollbar { width: 6px; height: 5px; }
-:where(#tasks, #steps, .log-view, .command, .activity-content, .failure-content, .source-content, .devices, .device-resources)::-webkit-scrollbar-thumb { border-radius: 6px; background: #bfcbda; }
-.log-view { scrollbar-color: #455873 var(--log-bg); }
-.log-view::-webkit-scrollbar-thumb { background: #455873; }
+.log-view { --scrollbar-thumb: #455873; --scrollbar-hover: #69819f; --scrollbar-track: var(--log-bg); }
 #refresh[aria-busy="true"] .button-icon,
 #refresh-log[aria-busy="true"] .button-icon { animation: workbench-spin 1s linear infinite; }
 @keyframes workbench-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
+  .symbol.running { animation: none; }
   #refresh[aria-busy="true"] .button-icon,
   #refresh-log[aria-busy="true"] .button-icon { animation: none; }
 }
@@ -543,9 +558,9 @@ svg.symbol { display: block; flex: none; width: 16px; height: 16px; margin-top: 
   .page-footer { display: none; }
 
   /* Expanded inspection and explicit waits may grow the page, never cover the log. */
-  html:has(:is(#stage-queue:not([hidden]), .task-sidebar.mobile-expanded, .run-disclosures details[open])),
-  body:has(:is(#stage-queue:not([hidden]), .task-sidebar.mobile-expanded, .run-disclosures details[open])) { height: auto; min-height: 100dvh; overflow-y: auto; }
-  body:has(:is(#stage-queue:not([hidden]), .task-sidebar.mobile-expanded, .run-disclosures details[open])) main { flex: none; }
-  body:has(:is(#stage-queue:not([hidden]), .task-sidebar.mobile-expanded, .run-disclosures details[open])) .workspace { flex: none; min-height: 410px; }
-  body:has(:is(#stage-queue:not([hidden]), .task-sidebar.mobile-expanded, .run-disclosures details[open])) .log-view { flex: 0 0 260px; height: 260px; min-height: 260px; max-height: 260px; }
+  html:has(:is(#stage-queue:not([hidden]), #run-state.unconfirmed, .task-sidebar.mobile-expanded, .run-disclosures details[open])),
+  body:has(:is(#stage-queue:not([hidden]), #run-state.unconfirmed, .task-sidebar.mobile-expanded, .run-disclosures details[open])) { height: auto; min-height: 100dvh; overflow-y: auto; }
+  body:has(:is(#stage-queue:not([hidden]), #run-state.unconfirmed, .task-sidebar.mobile-expanded, .run-disclosures details[open])) main { flex: none; }
+  body:has(:is(#stage-queue:not([hidden]), #run-state.unconfirmed, .task-sidebar.mobile-expanded, .run-disclosures details[open])) .workspace { flex: none; min-height: 410px; }
+  body:has(:is(#stage-queue:not([hidden]), #run-state.unconfirmed, .task-sidebar.mobile-expanded, .run-disclosures details[open])) .log-view { flex: 0 0 260px; height: 260px; min-height: 260px; max-height: 260px; }
 }

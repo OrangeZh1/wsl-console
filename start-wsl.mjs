@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {hostname} from 'node:os';
 import {privateIPv4} from './lan-relay.mjs';
+import {API_VERSION,readAssetSnapshot,runtimeIdentity} from './identity.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url)),stateFile=join(root,'.local/lan-session.json');
 const wait=ms=>new Promise(ok=>setTimeout(ok,ms));
@@ -31,6 +32,19 @@ async function state(){try{
  }catch(error){if(error.code==='ENOENT')return null;throw error}}
 async function save(record){await mkdir(dirname(stateFile),{recursive:true});await writeFile(stateFile+'.tmp',JSON.stringify(record,null,2)+'\n',{mode:0o600});await rename(stateFile+'.tmp',stateFile);}
 
+export function viewerCompatibility(current,expected){
+ const reasons=[];if(current.apiVersion!==API_VERSION)reasons.push('API_VERSION');
+ if(expected)for(const field of ['buildVersion','assetsVersion','configVersion'])if(current[field]!==expected[field])reasons.push(field);
+ return reasons;
+}
+export function shutdownBlocker(saved,current,runs,relayChecks){
+ if(saved.backend.owned&&(current?.application!=='wsl-console'||current.pid!==saved.backend.pid||current.instanceId!==saved.backend.instanceId))return 'OWNED_BACKEND_IDENTITY_UNAVAILABLE';
+ if(saved.backend.owned&&saved.relays.some(relay=>!relay.owned))return 'SHARED_RELAY_DEPENDENCY';
+ if((saved.backend.owned||saved.relays.some(relay=>relay.owned))&&(!Array.isArray(runs?.runs)||runs.runs.some(run=>['running','queued'].includes(run.status)||run.recordUnavailable||run.error&&!run.steps?.length)))return 'ACTIVE_OR_UNREADABLE_RUNS';
+ if(relayChecks&&saved.relays.some(relay=>relay.owned&&!relayChecks.some(check=>check?.instanceId===relay.instanceId&&check.pid===relay.pid)))return 'OWNED_RELAY_IDENTITY_UNAVAILABLE';
+ return null;
+}
+
 export async function startWslConsole(options={}){
  if(process.platform!=='win32')throw Error('WINDOWS_LAUNCHER_REQUIRED');
  const config=JSON.parse(await readFile(join(root,'config.json'),'utf8'));
@@ -44,6 +58,10 @@ export async function startWslConsole(options={}){
   if(response){if(response.ok&&(await response.text()).includes('<title>WSL 验收进度</title>'))backend={application:'wsl-console',pid:null};else throw Error('LOCAL_PORT_IN_USE');}
  }
  if(backend&&backend.application!=='wsl-console')throw Error('LOCAL_PORT_IN_USE');
+ const update=reasons=>({localUrl,lanUrls:[],updateRequired:true,updateReasons:reasons,notice:'共享工作台仍在运行，需协调更新后端及已验证资源；本次未停止、重启或替换现有服务。',firewallChanged:false,automaticStartup:false});
+ if(backend&&viewerCompatibility(backend).length)return update(viewerCompatibility(backend));
+ let expected;try{const assets=await readAssetSnapshot(root);expected=await runtimeIdentity(root,config,assets)}catch(error){if(backend)return update(['LOCAL_RELEASE_NOT_READY']);throw error;}
+ if(backend&&viewerCompatibility(backend,expected).length)return update(viewerCompatibility(backend,expected));
  if(!backend){
   const instanceId=randomUUID();
   startHidden('wsl.exe',['-d',distro,'-u',user,'--exec','env','WSL_CONSOLE_INSTANCE_ID='+instanceId,'WSL_CONSOLE_WINDOWS_HOST='+hostname(),node,wslPath(join(root,'server.mjs')),wslPath(join(root,'config.json'))]);
@@ -68,18 +86,18 @@ export async function startWslConsole(options={}){
 
 export async function stopWslConsole(){
  if(process.platform!=='win32')throw Error('WINDOWS_LAUNCHER_REQUIRED');
- const saved=await state();if(!saved)return {stopped:[]};const stopped=[],retained=[];
- for(const relay of saved.relays){
-  if(!relay.owned)continue;const current=await get('http://'+relay.address+':'+relay.port+'/__wsl_console_lan');
-  if(current?.instanceId===relay.instanceId&&current.pid===relay.pid){process.kill(relay.pid,'SIGTERM');stopped.push(relay.pid);}else retained.push(relay);
- }
- if(retained.length){await save({...saved,relays:retained});return {stopped,lanRetained:'OWNED_RELAY_IDENTITY_UNAVAILABLE'};}
+ const saved=await state();if(!saved)return {stopped:[]};const stopped=[];
+ const current=await get(saved.localUrl+'/api/viewer'),runs=await get(saved.localUrl+'/api/runs'),blocker=shutdownBlocker(saved,current,runs);
+ if(blocker)return {stopped,backendRetained:blocker,groupRetained:true};
+ const relayChecks=[];for(const relay of saved.relays)if(relay.owned)relayChecks.push(await get('http://'+relay.address+':'+relay.port+'/__wsl_console_lan'));
+ const relayBlocker=shutdownBlocker(saved,current,runs,relayChecks);if(relayBlocker)return {stopped,lanRetained:relayBlocker,groupRetained:true};
+ for(const relay of saved.relays)if(relay.owned){process.kill(relay.pid,'SIGTERM');stopped.push(relay.pid);}
  saved.relays=saved.relays.filter(relay=>!stopped.includes(relay.pid));await save(saved);
  if(saved.backend.owned){
-  const current=await get(saved.localUrl+'/api/viewer'),runs=await get(saved.localUrl+'/api/runs');
   if(current?.application==='wsl-console'&&current.pid===saved.backend.pid&&current.instanceId===saved.backend.instanceId){
-   if(!runs||runs.runs.some(run=>['running','queued'].includes(run.status)))return {stopped,backendRetained:'ACTIVE_OR_UNREADABLE_RUNS'};
-   const result=spawnSync('wsl.exe',['-d',saved.distro,'-u',saved.user,'--exec',saved.node,'--input-type=module','-e',"process.kill(Number(process.argv[1]),'SIGTERM')",String(saved.backend.pid)],{encoding:'utf8',windowsHide:true});if(result.status!==0)throw Error('OWNED_BACKEND_STOP_FAILED');stopped.push(saved.backend.pid);
+   const stop="const pid=Number(process.argv[1]);process.kill(pid,'SIGTERM');for(let i=0;i<100;i++){try{process.kill(pid,0)}catch(error){if(error.code==='ESRCH')process.exit(0);throw error}await new Promise(ok=>setTimeout(ok,100))}process.exit(2)";
+   const result=spawnSync('wsl.exe',['-d',saved.distro,'-u',saved.user,'--exec',saved.node,'--input-type=module','-e',stop,String(saved.backend.pid)],{encoding:'utf8',windowsHide:true,timeout:15000});
+   if(result.status!==0){await save(saved);return {stopped,backendRetained:'OWNED_BACKEND_STOP_NOT_CONFIRMED'};}stopped.push(saved.backend.pid);
   }
  }
  await rm(stateFile);return {stopped};

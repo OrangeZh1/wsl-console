@@ -17,8 +17,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
-      - name: 构建共用控制台样式
-        run: npm run build:styles
+      - name: 构建控制台样式与版本清单
+        run: npm run build
       - name: 完整单元测试
         run: node --test --test-reporter=tap --test-concurrency=1 test/*.test.mjs
       - name: 准备独立浏览器工具
@@ -46,6 +46,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: viewer-assets
-          path: public/style.css
+          path: |
+            public/
+            build-manifest.json
           if-no-files-found: error
           retention-days: 7

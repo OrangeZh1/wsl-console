@@ -8,8 +8,13 @@ import http from 'node:http';
 import {randomUUID} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import {BACKEND_FILES,ASSET_FILES,readAssetSnapshot,runtimeIdentity} from '../identity.mjs';
 
 const execFileAsync=promisify(execFile);
+async function copyRuntime(directory){
+ for(const name of new Set([...BACKEND_FILES,'start-wsl.mjs','lan-relay.mjs','reporter.mjs']))await copyFile(new URL('../'+name,import.meta.url),join(directory,name));
+ if(process.platform==='win32'){await mkdir(join(directory,'public'));for(const [name]of Object.values(ASSET_FILES))await copyFile(new URL('../public/'+name,import.meta.url),join(directory,'public',name));}
+}
 async function launch(directory){
  const moduleUrl=pathToFileURL(join(directory,'start-wsl.mjs')).href;
  const script='const {startWslConsole}=await import('+JSON.stringify(moduleUrl)+'); console.log(JSON.stringify(await startWslConsole()));';
@@ -18,23 +23,25 @@ async function launch(directory){
 
 test('manual launcher is platform-gated, idempotent and never stops a reused backend',async t=>{
  const directory=await mkdtemp(join(tmpdir(),'wsl-console-launcher-'));t.after(()=>rm(directory,{recursive:true,force:true}));
- for(const name of ['start-wsl.mjs','lan-relay.mjs'])await copyFile(new URL('../'+name,import.meta.url),join(directory,name));await writeFile(join(directory,'config.json'),'{}');
+ await copyRuntime(directory);await writeFile(join(directory,'config.json'),'{}');
  const {startWslConsole,stopWslConsole}=await import(pathToFileURL(join(directory,'start-wsl.mjs')));
  if(process.platform!=='win32'){await assert.rejects(startWslConsole(),/WINDOWS_LAUNCHER_REQUIRED/);await assert.rejects(stopWslConsole(),/WINDOWS_LAUNCHER_REQUIRED/);return;}
- const instanceId=randomUUID(),backend=http.createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(req.url==='/api/viewer'?{application:'wsl-console',pid:process.pid,instanceId}:{runs:[],readOnly:true}));});
+ let identity,legacy=false;const instanceId=randomUUID(),backend=http.createServer((req,res)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(req.url==='/api/viewer'?{application:'wsl-console',pid:process.pid,instanceId,...legacy?{}:identity}:{runs:[],readOnly:true}));});
  await new Promise(ok=>backend.listen(0,'127.0.0.1',ok));t.after(()=>new Promise(ok=>backend.close(ok)));t.after(()=>stopWslConsole());const port=backend.address().port;
  await writeFile(join(directory,'config.json'),JSON.stringify({port}));
+ identity=await runtimeIdentity(directory,{port},await readAssetSnapshot(directory));
  const first=await launch(directory);assert.equal(first.localUrl,'http://127.0.0.1:'+port);assert.ok(first.lanUrls.length);assert.equal(first.firewallChanged,false);assert.equal(first.automaticStartup,false);
  const statePath=join(directory,'.local/lan-session.json'),before=JSON.parse(await readFile(statePath,'utf8'));assert.equal(before.backend.owned,false);
  await startWslConsole({port});const after=JSON.parse(await readFile(statePath,'utf8'));assert.deepEqual(after.relays.map(relay=>relay.pid),before.relays.map(relay=>relay.pid));
  for(const url of first.lanUrls){const response=await fetch(url+'/api/runs');assert.equal(response.status,200);assert.equal((await response.json()).readOnly,true);}
+ legacy=true;const savedText=await readFile(statePath,'utf8'),update=await startWslConsole({port});assert.equal(update.updateRequired,true);assert.ok(update.updateReasons.includes('API_VERSION'));assert.equal(await readFile(statePath,'utf8'),savedText);legacy=false;
  const stopped=await stopWslConsole();assert.equal(stopped.stopped.length,before.relays.length);assert.ok(!stopped.stopped.includes(process.pid));assert.equal((await fetch(first.localUrl+'/api/runs')).status,200);
  await writeFile(statePath,'{"format":"other-session"}');await assert.rejects(startWslConsole({port}),/SESSION_UNRECOGNIZED/);assert.equal(await readFile(statePath,'utf8'),'{"format":"other-session"}');await rm(statePath);
 });
 
 test('hidden WSL core survives its launcher and stops only its own temporary instance',{skip:process.platform!=='win32'},async t=>{
  const directory=await mkdtemp(join(tmpdir(),'wsl-console-hidden-'));t.after(()=>rm(directory,{recursive:true,force:true}));
- for(const name of ['start-wsl.mjs','lan-relay.mjs','server.mjs','retention.mjs','failure.mjs','resources.mjs','host.mjs'])await copyFile(new URL('../'+name,import.meta.url),join(directory,name));
+ await copyRuntime(directory);
  const socket=http.createServer();await new Promise(ok=>socket.listen(0,'127.0.0.1',ok));const port=socket.address().port;await new Promise(ok=>socket.close(ok));
  const match=directory.match(/^([a-z]):[\\/](.*)$/i),runsRoot='/mnt/'+match[1].toLowerCase()+'/'+match[2].replaceAll('\\','/')+'/runs';
  await mkdir(join(directory,'runs'));await writeFile(join(directory,'config.json'),JSON.stringify({port,runsRoot}));

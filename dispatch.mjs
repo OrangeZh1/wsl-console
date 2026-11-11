@@ -1,14 +1,22 @@
 import {readFile,writeFile,open,lstat,realpath,mkdir,readdir,rename,unlink,rmdir} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 
-const GiB=1024**3,ttl=45000;
+const GiB=1024**3,ttl=45000,manifestLimit=1024*1024;
 const identifier=value=>typeof value==='string'&&/^[a-z0-9][a-z0-9_-]{0,79}$/i.test(value);
 const own=(object,key)=>Object.hasOwn(object,key);
-const date=value=>typeof value==='string'?Date.parse(value):NaN;
+const date=value=>typeof value==='string'&&/(?:Z|[+-]\d{2}:\d{2})$/i.test(value)?Date.parse(value):NaN;
 const fresh=(value,now)=>Number.isFinite(date(value))&&date(value)<=now+5000&&now-date(value)<=ttl;
 const revision=job=>!own(job,'revision')?0:Number.isSafeInteger(job.revision)&&job.revision>=0?job.revision:NaN;
 const unchanged=(job,reason)=>({route:'unchanged',...(job?.plannedDeviceId?{deviceId:job.plannedDeviceId}:{}),reason});
+
+// Paths are part of the declared binding; existence/content are checked by the adapter.
+export function preparedInputDigest(inputs){
+ if(!Array.isArray(inputs)||!inputs.length)throw Error('PREPARED_INPUT_INVALID');
+ const paths=new Set(),rows=inputs.map(input=>{if(typeof input?.path!=='string'||!input.path.trim()||input.path.length>4096||!/^[a-f0-9]{64}$/i.test(input.sha256||'')||paths.has(input.path))throw Error('PREPARED_INPUT_INVALID');paths.add(input.path);return [input.path,input.sha256.toLowerCase()]});
+ rows.sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+}
+const preparationSignature=job=>createHash('sha256').update(JSON.stringify({inputs:job.inputs,executors:job.executors,inputsReady:job.inputsReady,peakBytes:job.peakBytes,portable:job.portable,visibility:job.visibility,repositoryVisibility:job.repositoryVisibility,sourcePublic:job.sourcePublic})).digest('hex');
 
 function admission(job,device,now){
  if(device.onlineState!=='online'||!fresh(device.checkedAt,now))return {reason:'设备不可达或核验已过期'};
@@ -61,9 +69,11 @@ async function atomicJson(file,value){
  finally{if(created)await unlink(temporary).catch(()=>{});}
 }
 
-async function readJob(file,jobId){
+export async function readQueueManifest(file,jobId){
  const info=await lstat(file);if(!info.isFile()||info.isSymbolicLink())throw Error('QUEUE_MANIFEST_INVALID');
- const text=await readFile(file,'utf8'),job=JSON.parse(text);
+ if(info.size>manifestLimit)throw Error('QUEUE_MANIFEST_TOO_LARGE');
+ const handle=await open(file,'r');let text;try{const buffer=Buffer.alloc(Math.min(info.size+1,manifestLimit+1));let length=0;while(length<buffer.length){const {bytesRead}=await handle.read(buffer,length,buffer.length-length,length);if(!bytesRead)break;length+=bytesRead;}if(length>manifestLimit||length>info.size)throw Error('QUEUE_MANIFEST_CHANGED_DURING_READ');text=buffer.subarray(0,length).toString('utf8')}finally{await handle.close()}
+ const job=JSON.parse(text);
  if(!job||Array.isArray(job)||job.id!==jobId||!Number.isFinite(revision(job))||['assignmentHistory','attemptHistory'].some(key=>own(job,key)&&!Array.isArray(job[key])))throw Error('QUEUE_MANIFEST_INVALID');
  return {job,text};
 }
@@ -78,8 +88,11 @@ export async function dispatchQueuedJob(queueRoot,jobId,devices,execute,{now}={}
  const root=await realpath(resolve(queueRoot)),directory=join(root,jobId),directoryInfo=await lstat(directory);
  if(!directoryInfo.isDirectory()||directoryInfo.isSymbolicLink())throw Error('QUEUE_DIRECTORY_INVALID');
  const file=join(directory,'job.json'),lease=join(directory,'lease'),ownerFile=join(lease,'owner.json');
- let expected=await readJob(file,jobId),job=expected.job,choice=chooseExecutionDevice(job,devices,{now:clock()});
+ let expected=await readQueueManifest(file,jobId),job=expected.job,choice=chooseExecutionDevice(job,devices,{now:clock()});
  if(choice.route==='unchanged')return {...choice,recoveryRequired:job.recoveryRequired===true};
+ const priorWait=job.waiting,signature=preparationSignature(job),candidate=devices.find(device=>device.id===choice.deviceId);
+ if(choice.route==='queued'&&priorWait?.kind==='resources'&&priorWait.reason===choice.reason&&priorWait.preparationSignature===signature&&clock()-date(priorWait.checkedAt)<30000)return choice;
+ if(choice.route==='device'&&priorWait&&priorWait.deviceId===choice.deviceId&&priorWait.preparationSignature===signature&&['preparation','admission'].includes(priorWait.kind)&&date(priorWait.nextCheckAt)>clock()&&(priorWait.kind==='preparation'||priorWait.deviceCheckedAt===candidate?.checkedAt))return {route:'queued',deviceId:choice.deviceId,reason:priorWait.reason,retryAt:priorWait.nextCheckAt};
  try{await mkdir(lease)}catch(error){if(error.code==='EEXIST')return {route:'queued',reason:'任务已有租约，保留原租约且不自动抢占'};throw error;}
  const token=randomUUID(),claimedAt=new Date(clock()).toISOString();
  let owner={format:'wsl-job-lease-v1',jobId,token,pid:process.pid,claimedAt,revision:revision(job),state:'leased'},invoked=false;
@@ -87,7 +100,7 @@ export async function dispatchQueuedJob(queueRoot,jobId,devices,execute,{now}={}
  async function assertOwner(){if(!await owns())throw Error('QUEUE_LEASE_OWNERSHIP_CHANGED')}
  async function writeOwner(patch){await assertOwner();owner={...owner,...patch};await atomicJson(ownerFile,owner);}
  async function save(next){
-  await assertOwner();const current=await readJob(file,jobId);
+  await assertOwner();const current=await readQueueManifest(file,jobId);
   // The lease is the exclusion mechanism; revision + exact contents detect
   // conflicting non-participating writers before a write, rather than replacing them.
   if(revision(current.job)!==revision(expected.job)||current.text!==expected.text)throw Error('QUEUE_REVISION_CHANGED');
@@ -105,33 +118,61 @@ export async function dispatchQueuedJob(queueRoot,jobId,devices,execute,{now}={}
   try{await save({...job,status:'blocked',recoveryRequired:true,dispatchLease:{token,deviceId:choice.deviceId,claimedAt,state:'recovery-required'},recovery});recoveryRecorded=true}catch{}
   return {route:'unchanged',deviceId:choice.deviceId,reason,recoveryRequired:true,recoveryRecorded,leaseRetained:true};
  }
+ async function recordWait(reason,{kind='resources',result,deviceId=choice.deviceId,retryAfterMs=5000}={}){
+  const nowMs=clock(),at=new Date(nowMs).toISOString(),previous=job.waiting,same=previous?.reason===reason&&previous?.deviceId===deviceId&&previous?.kind===kind&&previous?.preparationSignature===signature;
+  const next={...job,status:'queued',queueReason:reason,waiting:{kind,reason,...(deviceId?{deviceId}:{}),since:same?previous.since:at,checkedAt:at,nextCheckAt:new Date(nowMs+Math.max(1000,Math.min(retryAfterMs,300000))).toISOString(),preparationSignature:signature,...(candidate?.checkedAt?{deviceCheckedAt:candidate.checkedAt}:{}),...(result?.admissionEvidence?{admissionEvidence:result.admissionEvidence}:{})}};
+  delete next.dispatchLease;
+  if(result)next.result=result;
+  // Admission polls are not execution attempts. Unchanged resource waits stay bounded.
+  if(!same||job.dispatchLease||result||nowMs-date(previous.checkedAt)>=30000)await save(next);
+ }
+ let progressTail=Promise.resolve(),progressError;
+ function report(progress){
+  const operation=progressTail.then(async()=>{
+   if(progress?.format!=='wsl-job-result-v2'||progress.finished!==false||progress.commandStarted!==true||progress.status!=='running'||progress.attemptId!==token||progress.deviceId!==choice.deviceId||!job.dispatchLease?.inputDigest||progress.inputDigest!==job.dispatchLease.inputDigest||!identifier(progress.runId))throw Error('EXECUTION_PROGRESS_BINDING_MISMATCH');
+   const start=date(progress.startedAt),heartbeat=date(progress.heartbeatAt||progress.startedAt);
+   if(!Number.isFinite(start)||!Number.isFinite(heartbeat)||start<date(claimedAt)-15000||heartbeat<start||heartbeat>clock()+15000)throw Error('EXECUTION_PROGRESS_TIME_INVALID');
+   if(job.execution&&(job.execution.runId!==progress.runId||job.execution.startedAt!==progress.startedAt))throw Error('EXECUTION_PROGRESS_ATTEMPT_CHANGED');
+   if(job.execution&&date(job.execution.heartbeatAt)>=heartbeat)return;
+   const execution={attemptId:token,deviceId:choice.deviceId,inputDigest:progress.inputDigest,runId:progress.runId,startedAt:progress.startedAt,heartbeatAt:progress.heartbeatAt||progress.startedAt,...(typeof progress.activity==='string'?{activity:progress.activity.slice(0,2000)}:{})};
+   const next={...job,status:'running',startedAt:progress.startedAt,heartbeatAt:execution.heartbeatAt,execution,dispatchLease:{...job.dispatchLease,state:'running'}};delete next.waiting;delete next.queueReason;
+   await save(next);await writeOwner({state:'running',execution});
+  });
+  progressTail=operation.catch(error=>{progressError=error});return operation;
+ }
  try{
   await writeFile(ownerFile,JSON.stringify(owner,null,2)+'\n',{flag:'wx',mode:0o600});
-  const latest=await readJob(file,jobId);
+  const latest=await readQueueManifest(file,jobId);
   if(latest.text!==expected.text||revision(latest.job)!==revision(expected.job)){await release();return unchanged(latest.job,'任务修订已变化，未执行且保留新状态');}
   choice=chooseExecutionDevice(job,devices,{now:clock()});
-  if(choice.route==='unchanged'||choice.route==='queued'){await release();return choice;}
+  if(choice.route==='unchanged'){await release();return choice;}
+  if(choice.route==='queued'){await recordWait(choice.reason);await release();return choice;}
   const event={at:claimedAt,route:choice.route,fromDeviceId:job.plannedDeviceId??null,toDeviceId:choice.deviceId??null,reason:choice.reason};
-  const assigned={...job,executionRoute:choice.route,assignmentHistory:[...(job.assignmentHistory||[]),event]};
+  const changed=job.executionRoute!==choice.route||job.plannedDeviceId!==choice.deviceId;
+  const assigned={...job,executionRoute:choice.route,...(changed?{assignmentHistory:[...(job.assignmentHistory||[]),event]}:{})};
   if(choice.route==='github-actions'){
-   delete assigned.plannedDeviceId;await save(assigned);await release();return {...choice,status:job.status,leaseRetained:false};
+   delete assigned.plannedDeviceId;delete assigned.waiting;delete assigned.queueReason;if(changed||job.waiting)await save(assigned);await release();return {...choice,status:job.status,leaseRetained:false};
   }
   if(typeof execute!=='function'){await release();return {route:'queued',reason:'缺少实际执行端回调，尚未启动'};}
-  assigned.plannedDeviceId=choice.deviceId;assigned.dispatchLease={token,deviceId:choice.deviceId,claimedAt,needsWarmup:choice.needsWarmup,state:'leased'};
+  let inputDigest;try{inputDigest=preparedInputDigest(job.inputs)}catch{}
+  assigned.plannedDeviceId=choice.deviceId;assigned.dispatchLease={token,deviceId:choice.deviceId,inputDigest,claimedAt,needsWarmup:choice.needsWarmup,state:'leased'};
   await save(assigned);await writeOwner({deviceId:choice.deviceId,state:'callback',executionInvokedAt:new Date(clock()).toISOString()});
   invoked=true;
-  let result;try{result=await execute(structuredClone(job),devices.find(device=>device.id===choice.deviceId))}catch(error){return recover('执行结果未知：'+(error?.message||'执行端异常'));}
+  let result;try{result=await execute(structuredClone(job),devices.find(device=>device.id===choice.deviceId),report);await progressTail;if(progressError)throw progressError}catch(error){await progressTail;return recover('执行结果未知：'+(error?.message||'执行端异常'));}
   if(!result||typeof result!=='object'||Array.isArray(result))return recover('执行端未返回可确认的实际结果');
   try{result=JSON.parse(JSON.stringify(result))}catch{return recover('执行端结果无法持久化，保留租约等待恢复');}
   if(!result||typeof result!=='object'||Array.isArray(result))return recover('执行端未返回可持久化的实际结果');
   if(['queued','busy'].includes(result.status)){
-   if(['runId','receiptFile','exitCode','startedAt','finishedAt'].some(key=>own(result,key))||result.commandStarted===true)return recover('排队结果含启动或结束证据，无法确认命令未启动',result);
-   const next={...job,status:'queued',result,attemptHistory:[...(job.attemptHistory||[]),{at:new Date(clock()).toISOString(),deviceId:choice.deviceId,leaseToken:token,result}]};delete next.dispatchLease;
-   await save(next);await release();return {...choice,route:'queued',status:'queued',reason:result.reason||'执行端尚未启动命令，等待重新准入',leaseRetained:false};
+   if(own(job,'startedAt')||job.execution||['runId','receiptFile','exitCode','startedAt','finishedAt'].some(key=>own(result,key))||result.commandStarted!==false)return recover('排队结果含启动或结束证据，无法确认命令未启动',result);
+   if(result.waitKind==='admission'){const evidence=result.admissionEvidence;if(evidence?.format!=='wsl-job-result-v2'||evidence.attemptId!==token||evidence.deviceId!==choice.deviceId||!job.dispatchLease?.inputDigest||evidence.inputDigest!==job.dispatchLease.inputDigest||![0,75].includes(evidence.exitCode)||!Number.isFinite(date(evidence.reportedAt))||date(evidence.reportedAt)<date(claimedAt)-15000||date(evidence.reportedAt)>clock()+15000)return recover('准入等待缺少本次尝试的未启动回执，保留租约等待恢复',result);}
+   const reason=result.reason||'执行端尚未启动命令，等待重新准入';await recordWait(reason,{kind:result.waitKind==='admission'?'admission':'preparation',result,retryAfterMs:Number.isFinite(result.retryAfterMs)?result.retryAfterMs:30000});
+   await release();return {...choice,route:'queued',status:'queued',reason,leaseRetained:false};
   }
   const terminal=['passed','failed','blocked','interrupted','cancelled'].includes(result.status),receipt=typeof result.runId==='string'&&result.runId&&typeof result.receiptFile==='string'&&result.receiptFile&&Number.isFinite(date(result.finishedAt)),exit=Number.isInteger(result.exitCode)||result.exitCode===null;
-  if(!terminal||!receipt||!exit||result.status==='passed'&&result.exitCode!==0||result.timedOut===true||result.finished===false)return recover('执行端未提供一致的真实终态回执，保留租约等待恢复',result);
+  if(!terminal||!receipt||!exit||result.format!=='wsl-job-result-v2'||result.commandStarted!==true||result.attemptId!==token||result.deviceId!==choice.deviceId||result.inputDigest!==job.dispatchLease?.inputDigest||!inputDigest||result.status==='passed'&&result.exitCode!==0||result.timedOut===true||result.finished!==true||!Number.isFinite(date(result.startedAt))||date(result.startedAt)<date(claimedAt)-15000||date(result.finishedAt)<date(result.startedAt)||date(result.finishedAt)>clock()+15000)return recover('执行端未提供一致的真实终态回执，保留租约等待恢复',result);
+  if(job.execution&&(job.execution.runId!==result.runId||job.execution.startedAt!==result.startedAt))return recover('执行端终态与已确认运行不一致，保留租约等待恢复',result);
   const next={...job,status:result.status,finishedAt:result.finishedAt,result,attemptHistory:[...(job.attemptHistory||[]),{at:new Date(clock()).toISOString(),deviceId:choice.deviceId,leaseToken:token,result}]};delete next.dispatchLease;
+  delete next.waiting;delete next.queueReason;next.execution={attemptId:token,deviceId:choice.deviceId,inputDigest,runId:result.runId,startedAt:result.startedAt,finishedAt:result.finishedAt};
   if(own(result,'startedAt')){if(!Number.isFinite(date(result.startedAt)))return recover('执行端启动时间无效，保留租约等待恢复');next.startedAt=result.startedAt;}
   await save(next);await release();return {...choice,status:result.status,result,leaseRetained:false};
  }catch(error){
