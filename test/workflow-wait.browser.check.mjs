@@ -5,20 +5,30 @@ import {join,resolve} from 'node:path';
 import {createRequire} from 'node:module';
 import {createViewer} from '../server.mjs';
 import {createReporter} from '../reporter.mjs';
+import {observeRuns} from '../devices.mjs';
 
 const args=process.argv.slice(2),value=key=>args[args.indexOf(key)+1];
 if(!args.includes('--playwright-root')||!args.includes('--output'))throw Error('Pass --playwright-root and --output');
 const output=resolve(value('--output'));await mkdir(output,{recursive:true});
 const {chromium}=createRequire(join(resolve(value('--playwright-root')),'package.json'))('playwright');
 const root=await mkdtemp(join(tmpdir(),'wsl-workflow-browser-'));let server,browser;
+const fixtureHost={id:'workflow-fixture-host',name:'阶段等待测试设备',computerName:'WORKFLOW-FIXTURE',hostname:'workflow-fixture-linux',platform:'linux',source:'manual'};
+const report=definition=>createReporter(root,{executor:fixtureHost,...definition});
+function fixtureMetadata(data){
+ // The controlled UI producer emits a new synthetic pulse for each read; the
+ // receiver-monotonic clock contract remains covered by clock.test.mjs.
+ const now=Date.now(),heartbeatAt=new Date(now).toISOString(),devices=[{...fixtureHost,transport:'local',onlineState:'online',checkedAt:heartbeatAt,resources:{state:'running',lockBusy:false},runs:[]}],runs=data.runs.map(run=>({...run,...(['running','queued'].includes(run.status)?{heartbeatAt}:{}),steps:run.steps.map(step=>({...step,...(step.status==='running'?{heartbeatAt}:{})}))}));
+ const observed=observeRuns(runs,devices,{now});return {...data,viewerHost:fixtureHost,...observed};
+}
 try{
- const older=await createReporter(root,{id:'workflow-old',taskKey:'workflow',name:'阶段等待分层（测试数据）',projects:['测试项目'],steps:[{id:'old',label:'以前的失败阶段'}]});await older.step('old',{status:'running',startedAt:'2026-11-10T00:00:00Z'});await older.step('old',{status:'failed',exitCode:1,error:'以前失败记录'});await older.finish();
- const reporter=await createReporter(root,{id:'workflow',taskKey:'workflow',name:'阶段等待分层（测试数据）',projects:['测试项目'],steps:[{id:'first',label:'首个命令'},{id:'flow',label:'验收流程'},{id:'next',label:'下一阶段'},{id:'git',label:'未来Git提交'}]});
+ const older=await report({id:'workflow-old',taskKey:'workflow',name:'阶段等待分层（测试数据）',projects:['测试项目'],steps:[{id:'old',label:'以前的失败阶段'}]});await older.step('old',{status:'running',startedAt:'2026-11-10T00:00:00Z'});await older.step('old',{status:'failed',exitCode:1,error:'以前失败记录'});await older.finish();
+ const reporter=await report({id:'workflow',taskKey:'workflow',name:'阶段等待分层（测试数据）',projects:['测试项目'],steps:[{id:'first',label:'首个命令'},{id:'flow',label:'验收流程'},{id:'next',label:'下一阶段'},{id:'git',label:'未来Git提交'}]});
  const reason='等待共享 heavy-task.lock；其他项目持锁，本阶段命令尚未启动',file=join(root,'workflow/run.json');
  const queueReason=async value=>{const record=JSON.parse(await readFile(file,'utf8'));if(value===undefined)delete record.queueReason;else record.queueReason=value;await writeFile(file,JSON.stringify(record))};
  await reporter.step('first',{status:'running',command:['node','first-fixture.mjs']});await reporter.log('first','FIRST COMPLETED\n');await reporter.step('flow',{status:'running',activity:'正在执行首个阶段'});await reporter.step('git',{status:'queued',detail:'等待全部验收完成后提交'});
- server=await createViewer({runsRoot:root});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin='http://127.0.0.1:'+server.address().port;
+ server=await createViewer({runsRoot:root,host:{id:fixtureHost.id,name:fixtureHost.name},devices:[{...fixtureHost,transport:'local'}]});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin='http://127.0.0.1:'+server.address().port;
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
+ await page.route('**/api/runs',async route=>{const response=await route.fetch();await route.fulfill({response,body:JSON.stringify(fixtureMetadata(await response.json())),contentType:'application/json'});});
  const refresh=async()=>{await page.locator('#refresh').click();await page.locator('#refresh').filter({hasText:'刷新状态'}).waitFor()};
  await page.goto(origin);await page.waitForFunction(()=>document.querySelector('#run-state').textContent==='执行中');const initialStart=await page.locator('#started').innerText();
  await queueReason(reason);await refresh();assert.equal(await page.locator('#stage-queue').isVisible(),false,'a live command beats stale waiting metadata');assert.equal(await page.locator('#stage-queue-count').innerText(),'阶段排队 0');

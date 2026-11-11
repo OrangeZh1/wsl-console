@@ -5,34 +5,43 @@ import {join,resolve,dirname} from 'node:path';
 import {createRequire} from 'node:module';
 import {createViewer} from '../server.mjs';
 import {createReporter} from '../reporter.mjs';
+import {observeRuns} from '../devices.mjs';
 
 const args=process.argv.slice(2),option=name=>args[args.indexOf(name)+1];
 if(!args.includes('--playwright-root')||!args.includes('--output'))throw Error('Use node test/browser.check.mjs --playwright-root <existing project with playwright> --output <OS temporary evidence directory>');
 const output=resolve(option('--output'));await mkdir(output,{recursive:true});
 const {chromium}=createRequire(join(resolve(option('--playwright-root')),'package.json'))('playwright');
 const fixture=await mkdtemp(join(tmpdir(),'wsl-progress-browser-')),runsRoot=join(fixture,'runs');
+const fixtureHost={id:'browser-fixture-host',name:'浏览器测试设备',computerName:'BROWSER-FIXTURE',hostname:'browser-fixture-linux',platform:'linux',source:'manual'};
+const report=definition=>createReporter(runsRoot,{executor:fixtureHost,...definition});
+function fixtureMetadata(data){
+ // UI contracts have an explicit test-owned producer heartbeat. Clock-domain
+ // observation itself is tested separately in clock.test.mjs, without this mock.
+ const now=Date.now(),heartbeatAt=new Date(now).toISOString(),devices=[{...fixtureHost,transport:'local',onlineState:'online',checkedAt:heartbeatAt,resources:{state:'running',lockBusy:false},runs:[]}],runs=data.runs.map(run=>({...run,...(['running','queued'].includes(run.status)?{heartbeatAt}:{}),steps:run.steps.map(step=>({...step,...(step.status==='running'?{heartbeatAt}:{})}))}));
+ const observed=observeRuns(runs,devices,{now});return {...data,viewerHost:fixtureHost,...observed};
+}
 let server,browser;
 try{
- const a=await createReporter(runsRoot,{id:'a',name:'浏览器验收 A（测试数据）',projects:['项目 A'],steps:[{id:'unit',label:'单元测试 A'},{id:'parallel',label:'并行构建 A'},{id:'later',label:'后续阶段 A'}]});
- const oldB=await createReporter(runsRoot,{id:'b-old',taskKey:'task-b',name:'浏览器验收 B 早期名称（测试数据）',projects:['项目 B'],steps:[{id:'success',label:'SDK 构建 B 早期'},{id:'unit',label:'单元测试 B 早期'}]});await oldB.step('success',{status:'passed',exitCode:0});await oldB.log('success','SDK BUILD PASSED\n');await oldB.step('unit',{status:'running',startedAt:new Date(Date.now()-60000).toISOString()});await oldB.log('unit','B 早期失败日志\ncurl: (28) Operation timed out after 30000 milliseconds\n');await oldB.step('unit',{status:'failed',exitCode:1});await oldB.finish();
- const b=await createReporter(runsRoot,{id:'b',taskKey:'task-b',name:'浏览器验收 B（测试数据）',projects:['项目 B'],steps:[{id:'unit',label:'单元测试 B'}]});
+ const a=await report({id:'a',name:'浏览器验收 A（测试数据）',projects:['项目 A'],steps:[{id:'unit',label:'单元测试 A'},{id:'parallel',label:'并行构建 A'},{id:'later',label:'后续阶段 A'}]});
+ const oldB=await report({id:'b-old',taskKey:'task-b',name:'浏览器验收 B 早期名称（测试数据）',projects:['项目 B'],steps:[{id:'success',label:'SDK 构建 B 早期'},{id:'unit',label:'单元测试 B 早期'}]});await oldB.step('success',{status:'passed',exitCode:0});await oldB.log('success','SDK BUILD PASSED\n');await oldB.step('unit',{status:'running',startedAt:new Date(Date.now()-60000).toISOString()});await oldB.log('unit','B 早期失败日志\ncurl: (28) Operation timed out after 30000 milliseconds\n');await oldB.step('unit',{status:'failed',exitCode:1});await oldB.finish();
+ const b=await report({id:'b',taskKey:'task-b',name:'浏览器验收 B（测试数据）',projects:['项目 B'],steps:[{id:'unit',label:'单元测试 B'}]});
  await b.step('unit',{status:'running',startedAt:new Date(Date.now()-5000).toISOString(),command:['node','--test','b.test.mjs']});await b.log('unit','B 当前日志\n'+Array.from({length:100},(_,i)=>'B 日志行 '+i).join('\n'));
  await a.step('unit',{status:'running',command:['node','--test','a.test.mjs']});await a.log('unit','A 旧请求日志\n');
  await a.step('parallel',{status:'running',detail:'独立后台构建',command:['node','build.mjs'],activity:'正在检查已构建的控制台入口',activityUpdatedAt:new Date().toISOString()});
- await createReporter(runsRoot,{id:'waiting',name:'等待任务（测试数据）',projects:['项目 C'],queuePosition:2,steps:[{id:'build',label:'尚未启动构建'}]});
+ await report({id:'waiting',name:'等待任务（测试数据）',projects:['项目 C'],queuePosition:2,steps:[{id:'build',label:'尚未启动构建'}]});
  await writeFile(join(runsRoot,'waiting/logs/build.log'),'THIS OLD LOG MUST NOT APPEAR');
- server=await createViewer({runsRoot});await new Promise(ok=>server.listen(0,'127.0.0.1',ok));const origin='http://127.0.0.1:'+server.address().port;
+ server=await createViewer({runsRoot,host:{id:fixtureHost.id,name:fixtureHost.name},devices:[{...fixtureHost,transport:'local'}]});await new Promise(ok=>server.listen(0,'127.0.0.1',ok));const origin='http://127.0.0.1:'+server.address().port;
  assert.match(await(await fetch(origin)).text(),/<title>WSL 验收进度<\/title>/);
  browser=await chromium.launch({headless:true,...process.platform==='win32'?{channel:'msedge'}:{}});const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[];await page.addInitScript(()=>{document.execCommand=()=>false});page.on('pageerror',error=>errors.push(error.message));
  let heldA=false,releaseA,holdMetadata=false,heldMetadata=false,releaseMetadata,failMetadata=false,holdFailure=false,heldFailure=false,releaseFailure;
  await page.route('**/api/runs**',async route=>{
   const path=new URL(route.request().url()).pathname;
   if(path==='/api/runs'&&failMetadata){failMetadata=false;return route.abort('failed')}
-  const response=await route.fetch();
+  const response=await route.fetch(),data=path==='/api/runs'?fixtureMetadata(await response.json()):null;
   if(path==='/api/runs/a/steps/unit/log'&&!heldA){heldA=true;await new Promise(ok=>releaseA=ok);}
   if(path==='/api/runs'&&holdMetadata){heldMetadata=true;await new Promise(ok=>releaseMetadata=ok);holdMetadata=false;}
   if(path==='/api/runs/b-old/failure'&&holdFailure){heldFailure=true;await new Promise(ok=>releaseFailure=ok);holdFailure=false;}
-  await route.fulfill({response});
+  await route.fulfill(data?{response,body:JSON.stringify(data),contentType:'application/json'}:{response});
  });
  await page.goto(origin);await page.locator('#run-name').filter({hasText:'验收 A'}).waitFor();
  assert.match(await page.locator('#task-count').innerText(),/进行 2/);assert.match(await page.locator('#task-count').innerText(),/待启动 1/);assert.match(await page.locator('#task-count').innerText(),/历史 0/);assert.equal(await page.locator('#tasks .task').count(),2);assert.equal(await page.locator('[data-filter="running"]').getAttribute('aria-pressed'),'true');assert.equal(await page.locator('#tasks .task-name').first().getAttribute('title'),'浏览器验收 A（测试数据）');
@@ -66,7 +75,7 @@ try{
   if(width>=1280){assert.equal(layout.navLeft,24);assert.equal(layout.navWidth,220);assert.ok(layout.toolsLeft>=layout.navLeft+layout.navWidth,JSON.stringify(layout));assert.ok(layout.selectWidth>=150&&layout.selectWidth<=360,JSON.stringify(layout));assert.equal(layout.connectionRight,width-24);assert.ok(layout.footerTopDifference<=1);assert.ok(layout.footerBottomDifference<=1);const header=await page.evaluate(()=>{const refresh=document.querySelector('#refresh').getBoundingClientRect(),devices=document.querySelector('#device-panel').getBoundingClientRect(),connection=document.querySelector('#connection').getBoundingClientRect();return {refreshRight:refresh.right,devicesLeft:devices.left,devicesRight:devices.right,connectionLeft:connection.left}});assert.ok(header.devicesLeft>=header.refreshRight,JSON.stringify(header));assert.ok(header.devicesRight<=header.connectionLeft,JSON.stringify(header));}assert.equal(layout.selectHeight,layout.refreshHeight);
   await page.screenshot({path:join(output,'running-'+width+'x'+height+'.png'),fullPage:false});layouts.push({width,height,...layout});
  }
- const statusSteps=['passed','failed','queued','blocked','cancelled','interrupted'],stateRun=await createReporter(runsRoot,{id:'states',name:'状态图标验收（测试数据）',projects:['状态测试'],steps:statusSteps.map(id=>({id,label:id}))});for(const status of statusSteps.filter(item=>item!=='queued'))await stateRun.step(status,{status,...status==='passed'?{exitCode:0}:status==='failed'?{exitCode:1}:{}});
+ const statusSteps=['passed','failed','queued','blocked','cancelled','interrupted'],stateRun=await report({id:'states',name:'状态图标验收（测试数据）',projects:['状态测试'],steps:statusSteps.map(id=>({id,label:id}))});for(const status of statusSteps.filter(item=>item!=='queued'))await stateRun.step(status,{status,...status==='passed'?{exitCode:0}:status==='failed'?{exitCode:1}:{}});
  await page.setViewportSize({width:1440,height:900});await page.locator('#refresh').click();await page.locator('#refresh').filter({hasText:'刷新状态'}).waitFor();await page.locator('#tasks .task').filter({hasText:'状态图标验收'}).click();await page.waitForFunction(()=>[...document.querySelectorAll('#steps svg.symbol')].every(el=>el.getBBox().width>0));const glyphs=await page.locator('#steps svg.symbol').evaluateAll(nodes=>nodes.map(el=>({name:el.getAttribute('data-icon'),label:el.getAttribute('aria-label'),color:getComputedStyle(el).color,width:el.getBBox().width,href:el.querySelector('use').getAttribute('href')})));assert.equal(glyphs.length,6);assert.ok(glyphs.every(icon=>icon.width>0&&icon.label&&icon.href.startsWith('/icons.svg#status-')));assert.equal(glyphs[4].name,'lucide:circle-slash');assert.equal(glyphs[5].name,'lucide:circle-pause');assert.notEqual(glyphs[3].color,glyphs[1].color);await page.screenshot({path:join(output,'status-icons-1440x900.png'),fullPage:false});
  assert.deepEqual(errors,[]);await writeFile(join(output,'browser-check.json'),JSON.stringify({checkedAt:new Date().toISOString(),fixtureData:true,checks:['logical task groups retained retry records','old failed run stays selectable without losing its log','category buttons filter logical tasks','empty category clears prior results','category restores prior task and stage','parallel activity and explicit missing-detail fallback','queued metadata without fabricated execution','delayed prior-task logs ignored','category selection stable through delayed metadata','running task moving to history keeps current detail','independent manual refresh loading','failure restores refresh control','desktop and mobile fixed viewport with internal log scrolling','mobile native stage selector and user-controlled task navigation','390/500/768 mobile logs stay at least 260px with expanded activity','2040px uses full viewport with 24px left inset','local Iconify SVG glyphs render with distinct states','initial final title'],layouts,glyphs,pageErrors:errors},null,2)+'\n');console.log('Viewer browser acceptance passed: '+output);
 }finally{
