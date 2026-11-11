@@ -38,13 +38,21 @@ export function chooseExecutionDevice(job,devices,{now=Date.now()}={}){
  if(!['private','internal','none','unpublished'].includes(job.visibility||job.repositoryVisibility))return {route:'queued',reason:'仓库可见性尚未核实，不推断执行位置'};
  if(job.inputsReady!==true)return {route:'queued',reason:'不可变输入尚未准备完成'};
  if(!Number.isSafeInteger(job.peakBytes)||job.peakBytes<0)return {route:'queued',reason:'缺少明确的有界内存峰值预算'};
- const available=Array.isArray(devices)?devices.filter(device=>identifier(device?.id)&&['local','ssh'].includes(device.transport)):[],counts=new Map();
+ const configured=Array.isArray(devices)?devices:[],remotes=configured.filter(device=>device?.transport==='ssh');
+ const available=configured.filter(device=>identifier(device?.id)&&['local','ssh'].includes(device.transport)),counts=new Map();
  for(const device of available)counts.set(device.id,(counts.get(device.id)||0)+1);
  const unique=available.filter(device=>counts.get(device.id)===1);
- const candidates=job.portable===true?[...unique.filter(device=>device.transport==='ssh'),...unique.filter(device=>device.transport==='local')]:unique.filter(device=>device.id===job.plannedDeviceId);
+ const online=unique.filter(device=>device.transport==='ssh'&&device.onlineState==='online'&&fresh(device.checkedAt,now));
+ const unreachable=remotes.length>0&&remotes.every(device=>counts.get(device.id)===1&&device.onlineState==='unreachable'&&fresh(device.checkedAt,now));
+ if(!online.length&&!unreachable)return {route:'queued',reason:remotes.length?'远程状态缺失、已过期或尚未确认不可达，本机不接收项目':'尚未配置远程设备，不能将缺少探测当作远程不可达'};
+ // Online remotes lock the execution location even when admission fails.
+ // Local capacity is considered only after every configured remote is freshly unreachable.
+ const pool=online.length?online:unique.filter(device=>device.transport==='local');
+ const candidates=job.portable===true?pool:pool.filter(device=>device.id===job.plannedDeviceId);
+ const location=online.length?'远程在线，本机不接收项目':'所有远程均已确认不可达，核验本机准入';
  const reasons=[];
- for(const device of candidates){const check=admission(job,device,now);if(!check.reason)return {route:'device',deviceId:device.id,needsWarmup:check.needsWarmup,reason:check.needsWarmup?'候选设备 WSL 未运行；须先预热，再重新采样并持有统一 flock，尚未通过 Linux 准入':job.portable===true?(device.transport==='ssh'?'远程设备满足本次快照准入':'远程不可用，采用满足同等准入的本机'):'任务不可迁移，保留满足准入的原设备'};reasons.push(device.id+'：'+check.reason);}
- return {route:'queued',reason:reasons.length?reasons.join('；'):job.portable===true?'没有可用的已配置执行设备':'任务不可迁移且原设备不可用'};
+ for(const device of candidates){const check=admission(job,device,now);if(!check.reason)return {route:'device',deviceId:device.id,needsWarmup:check.needsWarmup,reason:check.needsWarmup?location+'；候选设备 WSL 未运行，须先预热、重新采样并持有统一 flock，尚未通过 Linux 准入':location+'；'+(job.portable===true?'候选设备满足本次快照准入':'保留满足准入的原设备')};reasons.push(device.id+'：'+check.reason);}
+ return {route:'queued',reason:location+'；'+(reasons.length?reasons.join('；'):job.portable===true?'没有满足条件的候选设备':'任务不可迁移，保留原分配排队')};
 }
 
 async function atomicJson(file,value){

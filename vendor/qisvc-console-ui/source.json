@@ -1,0 +1,9 @@
+{
+  "repository": "OrangeZh1/qisvc-console-ui",
+  "commit": "ec22302d737726314fdb930fc74a23bb47c55186",
+  "path": "styles/console.css",
+  "upstreamBlob": "6e8f184cba464d80dfe9f353033d5b331a2fa75c",
+  "sha256": "7ee30063872de8e933ff6643ed47a7752f5ccae6c66758dd563c31d57011eb6f",
+  "publicReuseAuthorizedAt": "2026-11-12",
+  "scope": "Owner authorized direct use and public redistribution of this shared stylesheet in wsl-console. Upstream repository visibility is unchanged."
+}

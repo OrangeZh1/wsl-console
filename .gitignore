@@ -10,3 +10,4 @@ coverage/
 *.tmp
 .DS_Store
 Thumbs.db
+public/style.css

@@ -21,13 +21,28 @@ test('dispatch policy keeps public CI on Actions and never relocates started wor
  assert.equal(chooseExecutionDevice(task({approved:false}),choices(),{now}).route,'queued');assert.equal(chooseExecutionDevice(task({inputsReady:false}),choices(),{now}).route,'queued');assert.equal(chooseExecutionDevice(task({peakBytes:undefined}),choices(),{now}).route,'queued');
 });
 
-test('dispatch prefers fresh remote capacity and applies the same admission to local fallback',()=>{
+test('online remote capacity locks the location even while busy or below admission',()=>{
  assert.equal(chooseExecutionDevice(task(),choices(),{now}).deviceId,'remote');
- for(const change of [d=>d.onlineState='unreachable',d=>d.checkedAt=stamp(-46000),d=>d.resources.sampledAt=stamp(-46000),d=>d.workload='executing',d=>d.leaseBusy=true,d=>d.resources.lockBusy=true,d=>d.resources.lockBusy=null,d=>d.resources.cpu.load1=4,d=>d.resources.windows.availableBytes=2*GiB,d=>d.resources.memory.availableBytes=GiB]){const devices=choices();change(devices[1]);assert.equal(chooseExecutionDevice(task(),devices,{now}).deviceId,'local');}
+ for(const change of [d=>d.resources.sampledAt=stamp(-46000),d=>d.resources=null,d=>d.workload='executing',d=>d.workload='unconfirmed',d=>d.leaseBusy=true,d=>d.resources.lockBusy=true,d=>d.resources.lockBusy=null,d=>d.resources.cpu.load1=4,d=>d.resources.windows.availableBytes=2*GiB,d=>d.resources.memory.availableBytes=GiB]){const devices=choices();change(devices[1]);const result=chooseExecutionDevice(task(),devices,{now});assert.equal(result.route,'queued');assert.match(result.reason,/远程在线，本机不接收项目/);}
  const low=choices();low.forEach(d=>d.resources.windows.availableBytes=2*GiB);assert.equal(chooseExecutionDevice(task(),low,{now}).route,'queued');
  const peak=choices();peak.forEach(d=>{d.resources.windows.availableBytes=3*GiB;d.resources.memory.availableBytes=3*GiB});assert.equal(chooseExecutionDevice(task({peakBytes:3*GiB}),peak,{now}).route,'queued');
  const stopped=choices();stopped[1].resources={state:'stopped',sampledAt:stamp(0),lockBusy:null,windows:{availableBytes:8*GiB},memory:null,cpu:null};const warm=chooseExecutionDevice(task(),stopped,{now});assert.equal(warm.deviceId,'remote');assert.equal(warm.needsWarmup,true);assert.match(warm.reason,/尚未通过 Linux 准入/);
- const fixed=chooseExecutionDevice(task({portable:false}),choices(),{now});assert.equal(fixed.deviceId,'local');assert.equal(chooseExecutionDevice(task({portable:false,plannedDeviceId:'missing'}),choices(),{now}).route,'queued');
+ assert.equal(chooseExecutionDevice(task({portable:false}),choices(),{now}).route,'queued');assert.equal(chooseExecutionDevice(task({portable:false,plannedDeviceId:'remote'}),choices(),{now}).deviceId,'remote');
+});
+
+test('stale unknown or absent remote probes never authorize local fallback',()=>{
+ for(const change of [d=>d.onlineState='unknown',d=>d.onlineState='stale',d=>d.checkedAt=stamp(-46000),d=>delete d.checkedAt,d=>d.checkedAt=stamp(6000),d=>{d.onlineState='unreachable';d.checkedAt=stamp(-46000)}]){const devices=choices();change(devices[1]);assert.equal(chooseExecutionDevice(task(),devices,{now}).route,'queued');}
+ assert.equal(chooseExecutionDevice(task(),[device('local','local')],{now}).route,'queued');
+ const mixed=[device('local','local'),device('remote','ssh',{onlineState:'unreachable'}),device('other','ssh',{onlineState:'unknown'})];assert.equal(chooseExecutionDevice(task(),mixed,{now}).route,'queued');
+ const duplicate=[device('local','local'),device('remote','ssh',{onlineState:'unreachable'}),device('remote','ssh',{onlineState:'unreachable'})];assert.equal(chooseExecutionDevice(task(),duplicate,{now}).route,'queued');
+});
+
+test('only every configured remote being freshly unreachable permits local admission',()=>{
+ const offline=()=>[device('local','local'),device('remote','ssh',{onlineState:'unreachable'}),device('other','ssh',{onlineState:'unreachable'})];
+ const local=chooseExecutionDevice(task(),offline(),{now});assert.equal(local.deviceId,'local');assert.match(local.reason,/所有远程均已确认不可达/);
+ for(const change of [d=>d.workload='executing',d=>d.resources.lockBusy=true,d=>d.resources.lockBusy=null,d=>d.resources.windows.availableBytes=2*GiB,d=>d.resources.memory.availableBytes=GiB,d=>d.resources.cpu.load1=4,d=>d.resources.sampledAt=stamp(-46000)]){const devices=offline();change(devices[0]);assert.equal(chooseExecutionDevice(task(),devices,{now}).route,'queued');}
+ assert.equal(chooseExecutionDevice(task({portable:false}),offline(),{now}).deviceId,'local');assert.equal(chooseExecutionDevice(task({portable:false,plannedDeviceId:'remote'}),offline(),{now}).route,'queued');
+ const mixed=offline();mixed[2].onlineState='online';mixed[2].workload='executing';assert.equal(chooseExecutionDevice(task(),mixed,{now}).route,'queued');
 });
 
 test('one atomic task lease covers callback lifetime and preserves assignment and failed attempts',async t=>{
@@ -48,7 +63,7 @@ test('pre-existing leases are retained without stale-time reclaim and public pla
 });
 
 test('only a command-free queued result releases a lease for another attempt',async t=>{
- const f=await fixture(t);const queued=await dispatchQueuedJob(f.root,'job',choices(),()=>({status:'queued',reason:'prepared adapter not ready'}),{now});assert.equal(queued.route,'queued');assert.equal(queued.leaseRetained,false);let saved=await f.read();assert.equal(saved.status,'queued');assert.equal(own(saved,'startedAt'),false);assert.equal(own(saved,'dispatchLease'),false);const passed=await dispatchQueuedJob(f.root,'job',choices(),()=>receipt(),{now});assert.equal(passed.status,'passed');saved=await f.read();assert.equal(saved.attemptHistory.length,2);
+ const f=await fixture(t),called=[];const queued=await dispatchQueuedJob(f.root,'job',choices(),(_job,d)=>{called.push(d.id);return {status:'queued',reason:'prepared adapter not ready'}},{now});assert.equal(queued.route,'queued');assert.equal(queued.leaseRetained,false);let saved=await f.read();assert.equal(saved.status,'queued');assert.equal(saved.plannedDeviceId,'remote');assert.equal(own(saved,'startedAt'),false);assert.equal(own(saved,'dispatchLease'),false);const passed=await dispatchQueuedJob(f.root,'job',choices(),(_job,d)=>{called.push(d.id);return receipt()},{now});assert.equal(passed.status,'passed');assert.deepEqual(called,['remote','remote']);saved=await f.read();assert.equal(saved.attemptHistory.length,2);
  const g=await fixture(t);const ambiguous=await dispatchQueuedJob(g.root,'job',choices(),()=>({status:'queued',exitCode:0}),{now});assert.equal(ambiguous.recoveryRequired,true);assert.ok((await stat(join(g.directory,'lease'))).isDirectory());
 });
 

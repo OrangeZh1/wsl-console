@@ -13,6 +13,8 @@ Copy-Item config.example.json config.json
 node start-wsl.mjs --no-browser
 ```
 
+页面直接复用已授权公开的 QiSvc 控制台共享样式，来源与固定版本见 [样式来源](docs/ui-attribution.md)。样式源分别位于 `vendor/qisvc-console-ui/console.css` 和 `styles/workbench.css`；`public/style.css` 是合并生成物，不进入 Git。手动从源码启动前可用 `npm run build:styles` 生成；本项目的正式构建与验收由 GitHub Actions 执行，成功后的 `viewer-assets` 制品提供同一份已验证样式。不需要安装前端运行时依赖。
+
 Windows 启动 WSL、core 和 LAN relay 时通过 `Start-Process -WindowStyle Hidden` 创建隐藏后台子进程，不弹出 CMD、PowerShell 或终端窗口；启动器退出后服务继续运行。保留手动启动，不设置开机自启，不使用 Windows 的 `detached: true` 新控制台模式。
 
 Windows / WSL 场景优先使用该启动器：它确认或启动 WSL 内的 core，并为当前有效的物理私网 IPv4 提供同子网只读 LAN 入口，复用兼容的已有进程。以启动器实际输出的本机 URL 和 LAN URL 为准，不在源码写死 DHCP 地址。没有有效 LAN 时如实报告 local-only。浏览器由使用者或浏览器工具打开／复用；`--no-browser` 不通过 shell 操作浏览器，同一轮不反复新开标签。
@@ -193,7 +195,7 @@ await reporter.activity('build','正在核对构建入口');
 npm test
 ```
 
-按 2026-11-12 的规则选择执行端：公开源码且 GitHub 仓库为 public 时使用 GitHub Actions；其余项目优先远程 WSL，远程不可达、繁忙或不满足资源准入时才考虑同样满足准入的本机 WSL。以下本地命令仅在相应 WSL 执行位置获准时使用；浏览器检查不为本工具新增运行时依赖，必要的 Windows 针对性补验使用已安装的 Edge。例如：
+按 2026-11-12 的规则选择执行端：公开源码且 GitHub 仓库为 public 时使用 GitHub Actions；其余项目在远程在线时只向远程分配，忙或资源不足继续排队，只有新鲜探测确认远程不可达才考虑同样满足准入的本机。以下本地命令仅在相应 WSL 执行位置获准时使用；浏览器检查不为本工具新增运行时依赖，必要的 Windows 针对性补验使用已安装的 Edge。例如：
 
 ```text
 node test/browser.check.mjs --playwright-root /path/to/project-with-playwright --output /tmp/wsl-console-browser-evidence
@@ -232,7 +234,7 @@ node watch-devices.mjs .local/device-watch.json
 
 执行端可手动使用 `node run-queue.mjs .local/queue-config.json --watch`，或用 `--once` 只处理当前队列。配置提供 `queueRoot`、`devicesRoot` 和相同设备定义；每个 `queueRoot/<jobId>/job.json` 必须已有任务授权、明确核实的 `visibility`、`inputsReady`、有界 `peakBytes`，并由项目自己的执行器准备不可变 `inputs`（路径及SHA256）、各设备 `executors`（程序、参数及终态回执路径）。执行器必须实际实现双端资源准入、设备统一 flock 和进程收尾；声明字段不是资源锁或权限凭据。
 
-`portable:true` 且没有启动记录的排队任务优先选择远程，回退本机时仍检查相同门槛。原子任务租约覆盖实际回调生命周期，并记录设备变更及原因；已启动任务不搬迁，未知执行结果保留恢复租约、不自动重跑。WSL 停止只产生待预热候选，执行端启动后仍须重新采样及持锁。公开项目只路由到 GitHub Actions，队列不会在物理设备执行它的 CI，也不自行发布源码或派发 Actions。
+`portable:true` 且没有启动记录的排队任务优先选择远程；远程在线期间不向本机分配新项目，即使远程忙或资源不足也继续排队。只有所有已配置远程设备都由新鲜探测确认不可达时才允许本机同门槛接收；未知、过期探测不能触发回退。原子任务租约覆盖实际回调生命周期，并记录设备变更及原因；已启动任务不搬迁，未知执行结果保留恢复租约、不自动重跑。WSL 停止只产生待预热候选，执行端启动后仍须重新采样及持锁。公开项目只路由到 GitHub Actions，队列不会在物理设备执行它的 CI，也不自行发布源码或派发 Actions。
 
 未接入这些执行器、尚无完整可迁移输入的旧运行记录只展示状态，不会仅凭页面上的“排队”自动接管或复制业务数据。两台物理设备各有自己的单重任务锁，任务租约负责同一任务不重复执行；查看器仍不是调度器。
 

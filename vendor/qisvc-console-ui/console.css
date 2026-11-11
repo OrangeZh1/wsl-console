@@ -1,0 +1,826 @@
+@theme {
+  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", ui-sans-serif, system-ui, sans-serif;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.625rem;
+  --radius-2xl: 0.625rem;
+  --radius-3xl: 0.625rem;
+}
+
+/* Keep console tokens independent from a host application's marketing theme. */
+.qisvc-console-shell,
+.qisvc-console-stage {
+  --ui-radius: 0.5rem;
+  --ui-container: 90rem;
+  --qisvc-console-nav-active-bg: color-mix(in srgb, var(--ui-text) 7%, var(--ui-bg));
+  --qisvc-console-nav-active-hover-bg: color-mix(in srgb, var(--ui-text) 10%, var(--ui-bg));
+  --qisvc-console-nav-idle: var(--ui-text);
+  --qisvc-console-nav-idle-hover: var(--ui-text-highlighted);
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.625rem;
+  --radius-2xl: 0.625rem;
+  --radius-3xl: 0.625rem;
+}
+
+.qisvc-console-shell {
+  position: relative !important;
+  inset: auto !important;
+  min-height: 100svh;
+  min-width: 0;
+  overflow: visible !important;
+}
+
+.qisvc-console-stage,
+.qisvc-console-navigation {
+  font-family: var(--font-sans);
+  font-synthesis: weight;
+}
+
+.qisvc-console-panel {
+  min-width: 0;
+  min-height: 100svh;
+}
+
+.qisvc-console-panel-body {
+  min-width: 0;
+  overflow: visible !important;
+}
+
+.qisvc-console-stage,
+.qisvc-console-stage > div,
+.qisvc-console-stage > div > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.qisvc-console-topbar {
+  position: sticky;
+  z-index: 30;
+  top: 0;
+  display: block;
+  width: 100%;
+  min-height: 4rem;
+  flex: none;
+  background: color-mix(in srgb, var(--ui-bg) 94%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.qisvc-console-topbar > [data-slot="root"] {
+  min-height: 4rem;
+}
+
+@media (min-width: 1024px) {
+  .qisvc-console-sidebar {
+    position: sticky !important;
+    top: 0;
+    width: 17rem !important;
+    height: 100svh;
+    align-self: flex-start;
+    transition: width 300ms cubic-bezier(.22, 1, .36, 1);
+    will-change: width;
+  }
+
+  .qisvc-console-sidebar[data-collapsed="true"] {
+    width: 4rem !important;
+  }
+}
+
+.qisvc-console-sidebar > [data-slot="header"] {
+  height: 4rem;
+  min-height: 4rem;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-bottom: 1px solid var(--ui-border);
+  padding-inline: 1rem;
+}
+
+.qisvc-console-sidebar-header {
+  width: 100%;
+  min-width: 0;
+  height: 4rem;
+  display: flex;
+  align-items: center;
+}
+
+.qisvc-console-sidebar-content {
+  height: 100dvh;
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.qisvc-console-sidebar-overlay {
+  background: color-mix(in srgb, #020617 58%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.qisvc-console-sidebar-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.qisvc-console-sidebar-footer {
+  flex: none;
+}
+
+/* The collapsed rail has one 64px track and one 40px control column.
+   Keeping every section on the same 32px axis prevents slot-specific padding drift. */
+.qisvc-console-sidebar[data-collapsed="true"] > [data-slot="header"],
+.qisvc-console-sidebar[data-collapsed="true"] > [data-slot="body"] .qisvc-console-sidebar-scroll,
+.qisvc-console-sidebar[data-collapsed="true"] > [data-slot="footer"] {
+  padding-inline: .75rem !important;
+}
+
+.qisvc-console-sidebar[data-collapsed="true"] > [data-slot="header"] {
+  justify-content: center;
+}
+
+.qisvc-console-sidebar[data-collapsed="true"] .qisvc-console-sidebar-action,
+.qisvc-console-sidebar[data-collapsed="true"] .qisvc-console-user-logout,
+.qisvc-console-sidebar[data-collapsed="true"] .qisvc-console-sidebar-control,
+.qisvc-console-sidebar[data-collapsed="true"] .qisvc-console-sidebar-link {
+  width: 2.5rem !important;
+  min-width: 2.5rem !important;
+  height: 2.5rem !important;
+  min-height: 2.5rem !important;
+  margin-inline: 0 !important;
+}
+
+.qisvc-console-brand {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: .625rem;
+  color: var(--ui-text-highlighted);
+}
+
+.qisvc-console-brand-logo {
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: none;
+  object-fit: contain;
+}
+
+.qisvc-console-brand-copy,
+.qisvc-console-user-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.qisvc-console-brand-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: .375rem;
+}
+
+.qisvc-console-brand-name {
+  overflow: hidden;
+  font-size: .875rem;
+  font-weight: 600;
+  line-height: 1.25rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qisvc-console-brand-badge {
+  flex: none;
+  border-radius: var(--radius-md);
+  padding: .125rem .375rem;
+  color: var(--ui-primary);
+  background: color-mix(in srgb, var(--ui-primary) 10%, transparent);
+  font-size: .5625rem;
+  font-weight: 600;
+  line-height: .75rem;
+  letter-spacing: .025em;
+}
+
+.qisvc-console-brand-caption {
+  display: block;
+  margin-top: .25rem;
+  overflow: hidden;
+  color: var(--ui-text-muted);
+  font-size: .625rem;
+  line-height: .75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qisvc-console-sidebar-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: .25rem;
+}
+
+.qisvc-console-sidebar-action,
+.qisvc-console-user-logout {
+  width: 2rem !important;
+  min-width: 2rem !important;
+  height: 2rem !important;
+  min-height: 2rem !important;
+  border-radius: var(--radius-md) !important;
+}
+
+.qisvc-console-sidebar-header > * {
+  min-width: 0;
+}
+
+.qisvc-console-sidebar > [data-slot="body"] {
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.qisvc-console-sidebar > [data-slot="footer"] {
+  overflow: hidden;
+  border-top: 1px solid var(--ui-border);
+  padding: .75rem;
+}
+
+/* Brand actions share one hit area so their hover state stays visually centred. */
+.qisvc-console-sidebar-header > div:has(> [data-slot="base"]) {
+  gap: .25rem !important;
+}
+
+.qisvc-console-sidebar-header [data-slot="base"]:is(button, a) {
+  position: relative;
+  display: inline-grid;
+  width: 2rem !important;
+  min-width: 2rem !important;
+  height: 2rem !important;
+  min-height: 2rem !important;
+  flex: none;
+  place-items: center;
+  gap: 0 !important;
+  padding: 0 !important;
+  border-radius: var(--radius-md) !important;
+  line-height: 0;
+  transform: none !important;
+}
+
+.qisvc-console-sidebar-header [data-slot="base"]:is(button, a):hover {
+  background: var(--ui-bg-elevated) !important;
+}
+
+.qisvc-console-sidebar-header [data-slot="base"]:is(button, a):active {
+  background: var(--ui-bg-accented) !important;
+}
+
+.qisvc-console-sidebar-header [data-slot="base"]:is(button, a) > [data-slot="leadingIcon"],
+.qisvc-console-sidebar-header [data-slot="base"]:is(button, a) > [data-slot="trailingIcon"] {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1rem;
+  height: 1rem;
+  margin: 0 !important;
+  transform: translate(-50%, -50%);
+}
+
+.qisvc-console-sidebar-content.qisvc-console-sidebar-content {
+  width: min(80vw, 20rem) !important;
+  max-width: min(80vw, 20rem) !important;
+}
+
+.qisvc-console-sidebar-scroll {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: .75rem 1rem;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ui-text-muted) 22%, transparent) transparent;
+}
+
+.qisvc-console-sidebar-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.qisvc-console-sidebar-scroll::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.qisvc-console-sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.qisvc-console-sidebar-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ui-text-muted) 20%, transparent);
+}
+
+.qisvc-console-sidebar-scroll:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ui-text-muted) 45%, transparent);
+}
+
+.qisvc-console-sidebar-nav {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: .25rem;
+}
+
+.qisvc-console-sidebar[data-collapsed="true"] .qisvc-console-sidebar-nav {
+  align-items: center;
+}
+
+/* Overlay triggers render through a headless component boundary, so the flex
+   rail cannot centre them as reliably as direct links. Give collapsed groups
+   an explicit full-track wrapper to keep every icon on the same 32px axis. */
+.qisvc-console-sidebar-group-collapsed {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+}
+
+.qisvc-console-sidebar-divider {
+  width: 100%;
+  height: 1px;
+  margin-block: .5rem;
+  background: var(--ui-border);
+}
+
+.qisvc-console-sidebar[data-collapsed="true"] .qisvc-console-sidebar-divider {
+  width: 2.5rem;
+}
+
+.qisvc-console-user {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 3rem;
+  align-items: center;
+  gap: .625rem;
+  border-radius: var(--radius-lg, .625rem);
+  padding: .25rem .375rem;
+}
+
+.qisvc-console-user-avatar {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 999px;
+  color: var(--ui-primary);
+  background: color-mix(in srgb, var(--ui-primary) 10%, transparent);
+  box-shadow: inset 0 0 0 1px var(--ui-border);
+  font-size: .75rem;
+  font-weight: 600;
+}
+
+.qisvc-console-user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.qisvc-console-user-name,
+.qisvc-console-user-description {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qisvc-console-user-name {
+  color: var(--ui-text-highlighted);
+  font-size: .75rem;
+  font-weight: 600;
+  line-height: 1rem;
+}
+
+.qisvc-console-user-description {
+  margin-top: .125rem;
+  color: var(--ui-text-muted);
+  font-size: .625rem;
+  line-height: .875rem;
+}
+
+.qisvc-console-sidebar-link {
+  min-height: 2.5rem;
+  border-radius: var(--radius-md);
+  color: var(--qisvc-console-nav-idle) !important;
+  background: transparent !important;
+  font-size: .875rem !important;
+  font-weight: 400 !important;
+  line-height: 1.25rem !important;
+  gap: .375rem !important;
+  padding-inline: .625rem !important;
+  transition: color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.qisvc-console-sidebar-link > [data-slot="label"] {
+  font: inherit;
+  line-height: inherit;
+}
+
+.qisvc-console-sidebar-link-icon {
+  width: 1.125rem !important;
+  height: 1.125rem !important;
+}
+
+.qisvc-console-sidebar-link:hover {
+  color: var(--qisvc-console-nav-idle-hover) !important;
+  background: var(--ui-bg-elevated) !important;
+}
+
+.qisvc-console-sidebar-link[data-active="true"] {
+  color: var(--ui-text-highlighted) !important;
+  background: var(--qisvc-console-nav-active-bg) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: none;
+  font-weight: 400 !important;
+}
+
+.qisvc-console-sidebar-link[data-active="true"]:hover {
+  color: var(--ui-text-highlighted) !important;
+  background: var(--qisvc-console-nav-active-hover-bg) !important;
+}
+
+.qisvc-console-sidebar-link[data-collapsed="true"] {
+  justify-content: center;
+  transform: none;
+}
+
+.qisvc-console-sidebar-group-trigger {
+  color: var(--qisvc-console-nav-idle);
+  background: transparent;
+  font-size: .875rem;
+  font-weight: 400;
+  line-height: 1.25rem;
+  gap: .375rem;
+  padding: .5rem .625rem;
+  transition: color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.qisvc-console-sidebar-group-icon {
+  width: 1.125rem !important;
+  height: 1.125rem !important;
+}
+
+.qisvc-console-sidebar-group-trigger:hover,
+.qisvc-console-sidebar-group-trigger[data-open="true"] {
+  color: var(--qisvc-console-nav-idle-hover);
+  background: var(--ui-bg-elevated);
+}
+
+.qisvc-console-sidebar-group-trigger[data-active="true"] {
+  color: var(--ui-text-highlighted);
+  background: var(--qisvc-console-nav-active-bg);
+  font-weight: 400;
+}
+
+.qisvc-console-sidebar-submenu-grid {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 200ms cubic-bezier(.22, 1, .36, 1), opacity 160ms ease;
+}
+
+.qisvc-console-sidebar-submenu-grid[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.qisvc-console-sidebar-submenu-viewport {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.qisvc-console-sidebar-submenu {
+  display: flex;
+  flex-direction: column;
+  gap: .125rem;
+  margin: .25rem 0 .5rem 1.5rem;
+  padding-left: .5rem;
+  border-left: 1px solid var(--ui-border);
+}
+
+.qisvc-console-sidebar-submenu .qisvc-console-sidebar-link {
+  min-height: 2.25rem;
+}
+
+.qisvc-console-sidebar-link > [data-slot="leadingIcon"],
+.qisvc-console-sidebar-link > [data-slot="label"] {
+  color: inherit !important;
+}
+
+/* Also normalise project-local links rendered inside the shared navigation slot. */
+.qisvc-console-sidebar-body .sidebar-navigation a {
+  color: var(--qisvc-console-nav-idle) !important;
+}
+
+.qisvc-console-sidebar-body .sidebar-navigation a:hover {
+  color: var(--qisvc-console-nav-idle-hover) !important;
+}
+
+.qisvc-console-sidebar-body .sidebar-navigation a[aria-current="page"] {
+  color: var(--ui-text-highlighted) !important;
+  background: var(--qisvc-console-nav-active-bg) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: none !important;
+  font-weight: 500;
+}
+
+.qisvc-console-sidebar-body .sidebar-navigation a[aria-current="page"]:hover {
+  color: var(--ui-text-highlighted) !important;
+  background: var(--qisvc-console-nav-active-hover-bg) !important;
+}
+
+.qisvc-console-sidebar-body .sidebar-group:has(a[aria-current="page"]) > .sidebar-group-trigger,
+.qisvc-console-sidebar-body .sidebar-group-trigger[aria-current="page"] {
+  color: var(--ui-text-highlighted) !important;
+  background: var(--qisvc-console-nav-active-bg) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: none !important;
+  font-weight: 500;
+}
+
+.qisvc-console-sidebar-body .sidebar-group:has(a[aria-current="page"]) > .sidebar-group-trigger:hover,
+.qisvc-console-sidebar-body .sidebar-group-trigger[aria-current="page"]:hover {
+  color: var(--ui-text-highlighted) !important;
+  background: var(--qisvc-console-nav-active-hover-bg) !important;
+}
+
+.qisvc-console-sidebar-body .sidebar-navigation a > :is(svg, [data-slot="leadingIcon"], [data-slot="label"]) {
+  color: inherit !important;
+}
+
+.qisvc-console-sidebar-body .sidebar-group-trigger > :is(svg, [data-slot="leadingIcon"], [data-slot="label"]) {
+  color: inherit !important;
+}
+
+@keyframes qisvc-console-rise {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes qisvc-console-soft-pop {
+  0% { opacity: 0; transform: scale(.92); }
+  70% { opacity: 1; transform: scale(1.035); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes qisvc-console-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes qisvc-console-loading-pulse {
+  0%, 100% { box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }
+  50% { box-shadow: 0 8px 24px -18px color-mix(in srgb, var(--ui-primary) 55%, transparent); }
+}
+
+.qisvc-console-stage > * > * {
+  animation: qisvc-console-rise 260ms cubic-bezier(.22, 1, .36, 1) both;
+}
+.qisvc-console-stage > * > :nth-child(2) { animation-delay: 25ms; }
+.qisvc-console-stage > * > :nth-child(3) { animation-delay: 50ms; }
+.qisvc-console-stage > * > :nth-child(4) { animation-delay: 75ms; }
+.qisvc-console-stage > * > :nth-child(n+5) { animation-delay: 95ms; }
+
+.qisvc-surface-card,
+.surface-card {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--radius-lg, .625rem);
+  background: color-mix(in srgb, var(--ui-bg) 94%, transparent);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 16px 38px -30px rgba(15, 23, 42, .42);
+  animation: qisvc-console-rise 240ms cubic-bezier(.22, 1, .36, 1) both;
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.qisvc-notice-surface {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-lg, .625rem) !important;
+}
+
+.qisvc-dialog-overlay,
+.qisvc-action-confirmation-overlay {
+  background: color-mix(in srgb, #020617 58%, transparent) !important;
+  backdrop-filter: blur(2px);
+}
+
+.qisvc-dialog-content[data-slot="content"][role="dialog"] {
+  width: calc(100vw - 2rem) !important;
+  max-height: calc(100dvh - 2rem) !important;
+  overflow: hidden;
+  border-radius: var(--radius-lg, .625rem) !important;
+}
+
+.qisvc-dialog-content--3xl[data-slot="content"][role="dialog"] {
+  max-width: min(48rem, calc(100vw - 2rem)) !important;
+}
+
+.qisvc-dialog-content--4xl[data-slot="content"][role="dialog"] {
+  max-width: min(56rem, calc(100vw - 2rem)) !important;
+}
+
+.qisvc-dialog-content--5xl[data-slot="content"][role="dialog"] {
+  max-width: min(64rem, calc(100vw - 2rem)) !important;
+}
+
+.qisvc-action-confirmation-content {
+  width: min(28rem, calc(100vw - 2rem)) !important;
+  max-width: min(28rem, calc(100vw - 2rem)) !important;
+  max-height: calc(100dvh - 2rem) !important;
+  overflow: hidden;
+  border-radius: var(--radius-lg, .625rem) !important;
+}
+
+a.qisvc-surface-card:hover,
+button.qisvc-surface-card:hover,
+a.surface-card:hover,
+button.surface-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px -18px rgba(15, 23, 42, .5);
+}
+
+a.qisvc-surface-card:active,
+button.qisvc-surface-card:active,
+a.surface-card:active,
+button.surface-card:active {
+  transform: translateY(0) scale(.995);
+}
+
+.qisvc-account-panel {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--radius-lg, .625rem);
+  background: var(--ui-bg);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .025);
+}
+
+.qisvc-auth-grid {
+  background-image: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ui-border) 72%, transparent) 1px, transparent 0);
+  background-size: 24px 24px;
+}
+
+.qisvc-console-status-icon {
+  color: var(--ui-primary);
+  background: color-mix(in srgb, var(--ui-primary) 12%, transparent);
+  animation: qisvc-console-soft-pop 360ms cubic-bezier(.22, 1, .36, 1) both;
+}
+.qisvc-console-status-icon[data-tone="info"] { color: var(--ui-info); background: color-mix(in srgb, var(--ui-info) 12%, transparent); }
+.qisvc-console-status-icon[data-tone="success"] { color: var(--ui-success); background: color-mix(in srgb, var(--ui-success) 12%, transparent); }
+.qisvc-console-status-icon[data-tone="warning"] { color: var(--ui-warning); background: color-mix(in srgb, var(--ui-warning) 12%, transparent); }
+.qisvc-console-status-icon[data-tone="error"] { color: var(--ui-error); background: color-mix(in srgb, var(--ui-error) 12%, transparent); }
+.qisvc-console-status-icon[data-tone="neutral"] { color: var(--ui-text-muted); background: var(--ui-bg-elevated); }
+
+.qisvc-console-page-heading,
+.qisvc-console-empty-state,
+.qisvc-console-error-state,
+.qisvc-console-loading-state {
+  animation: qisvc-console-rise 240ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.qisvc-console-empty-icon {
+  animation: qisvc-console-soft-pop 360ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.qisvc-console-loading-pill {
+  animation: qisvc-console-loading-pulse 1.8s ease-in-out infinite;
+}
+
+.qisvc-console-loading-icon {
+  animation: qisvc-console-spin .75s linear infinite;
+}
+
+.qisvc-data-table [data-slot="root"] {
+  scrollbar-gutter: stable;
+}
+
+.qisvc-data-table th,
+.qisvc-data-table td {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qisvc-data-table th > *,
+.qisvc-data-table td > * {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Fixed utility widths are not reliable across linked Nuxt workspaces. Keep
+   structural columns semantic and deterministic in every consuming app. */
+.qisvc-data-table .qisvc-data-table-select {
+  width: 3rem !important;
+  min-width: 3rem !important;
+  max-width: 3rem !important;
+}
+
+.qisvc-data-table .qisvc-data-table-sequence {
+  width: 4rem !important;
+  min-width: 4rem !important;
+  max-width: 4rem !important;
+}
+
+.qisvc-data-table .qisvc-data-table-actions {
+  width: 1%;
+  min-width: max-content;
+  padding-right: 1.25rem;
+  vertical-align: middle;
+  white-space: nowrap;
+  text-align: right;
+  border-inline: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Action slots are host-defined, so normalize their outer layout here. This
+   keeps icon-only and text actions on one centered baseline with a stable
+   right edge in QiSSO, License, and the website console. */
+.qisvc-data-table .qisvc-data-table-action-group {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .25rem;
+  width: max-content;
+  min-width: max-content;
+  max-width: none;
+  overflow: visible;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.qisvc-data-table .qisvc-data-table-action-group > *,
+.qisvc-data-table .qisvc-data-table-action-group :where([data-slot="base"]) {
+  flex: 0 0 auto;
+}
+
+/* Existing pages may already wrap their action buttons in a layout div. Let
+   the shared group own alignment and spacing without requiring host rewrites. */
+.qisvc-data-table .qisvc-data-table-action-group > div {
+  display: contents;
+}
+
+@media (max-width: 1023.98px) {
+  .qisvc-console-sidebar-content .qisvc-console-sidebar-header .qisvc-console-desktop-collapse[data-slot="base"] {
+    display: none !important;
+  }
+
+  .qisvc-console-shell {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: clip !important;
+  }
+
+  .qisvc-console-panel,
+  .qisvc-console-panel-body,
+  .qisvc-console-stage,
+  .qisvc-console-stage > div {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qisvc-console-sidebar,
+  .qisvc-console-sidebar-link,
+  .qisvc-console-sidebar-group-trigger,
+  .qisvc-console-sidebar-group-chevron,
+  .qisvc-console-sidebar-submenu-grid,
+  .qisvc-console-status-icon,
+  .qisvc-surface-card,
+  .surface-card {
+    transition: none !important;
+  }
+
+  .qisvc-console-status-icon {
+    transform: none !important;
+  }
+
+  .qisvc-console-stage > * > *,
+  .qisvc-surface-card,
+  .surface-card,
+  .qisvc-console-status-icon,
+  .qisvc-console-page-heading,
+  .qisvc-console-empty-state,
+  .qisvc-console-empty-icon,
+  .qisvc-console-error-state,
+  .qisvc-console-loading-state,
+  .qisvc-console-loading-pill,
+  .qisvc-console-loading-icon {
+    animation: none !important;
+  }
+}
