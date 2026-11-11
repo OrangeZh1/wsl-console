@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,rename} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
-import {normalizeRunRecord} from '../model.mjs';
+import {normalizeRunRecord,normalizeReusedFrom,diagnosticText} from '../model.mjs';
 import {aggregateRunStatus} from '../state.mjs';
 import {createRecordCache} from '../record-cache.mjs';
 import {observeRuns,readDevices} from '../devices.mjs';
@@ -35,6 +35,15 @@ test('pure: shared terminal aggregation keeps cancellation and interruption dist
  assert.equal(aggregateRunStatus({format:'wsl-progress-v1',finished:true,status:'passed',steps:[{status:'queued'}]}),'blocked');
  assert.equal(aggregateRunStatus({format:'wsl-progress-v1',finished:true,steps:[{status:'passed',exitCode:0,tests:{fail:1}}]}),'blocked');
  assert.equal(aggregateRunStatus({finished:true,steps:[{status:'passed'}]}),'passed');
+});
+
+test('pure: legacy lineage strings and diagnostic control output keep valid runs readable',()=>{
+ assert.deepEqual(normalizeReusedFrom('fixture-delivery-20260101-1700000000000/core-deps'),{runId:'fixture-delivery-20260101-1700000000000',stepId:'core-deps'});
+ assert.deepEqual(normalizeReusedFrom('fixture-proxy-20260101/checks; worker.rs/actions.mjs 未变化'),{runId:'fixture-proxy-20260101',stepId:'checks',note:'worker.rs/actions.mjs 未变化'});
+ const unresolved=normalizeReusedFrom('legacy opaque source with spaces');assert.equal(unresolved.unresolved,true);assert.equal(unresolved.runId,undefined);assert.match(unresolved.label,/legacy opaque/);
+ const normalized=normalizeRunRecord(record({error:null,steps:[{id:'unit',status:'failed',exitCode:1,error:'\x1b[31mPrisma gate failed\x1b[0m\r\n\x08details',reusedFrom:'original/test; unchanged'}]}),source);assert.equal(normalized.steps[0].error,'Prisma gate failed\ndetails');assert.equal(normalized.steps[0].reusedFrom.note,'unchanged');assert.equal(normalized.status,'failed');
+ const long=diagnosticText('x'.repeat(50000),40000);assert.ok(long.length<=40000);assert.match(long,/已截断/);assert.equal(diagnosticText({password:'never reflect'}),undefined);
+ assert.throws(()=>normalizeRunRecord(record({projects:{bad:true}}),source),/RUN_PROJECTS_INVALID/);
 });
 
 test('pure: real step executors and fresh cloud observations drive work state',()=>{

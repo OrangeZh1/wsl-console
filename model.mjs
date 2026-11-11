@@ -9,11 +9,26 @@ function date(value,key){if(value===undefined||value===null||value==='')return u
 function list(value,key,normalize,max=1000){if(value===undefined||value===null)return [];if(!Array.isArray(value)||value.length>max)throw Error('RUN_'+key.toUpperCase()+'_INVALID');return value.map(normalize);}
 const compact=value=>Object.fromEntries(Object.entries(value).filter(([,entry])=>entry!==undefined));
 
+// Diagnostic prose is optional evidence, not a reason to discard an otherwise
+// valid run. Never stringify arbitrary error objects or their private fields.
+export function diagnosticText(value,max=20000){
+ if(typeof value!=='string')return undefined;
+ let cleaned=value.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g,'').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').replace(/\r\n?/g,'\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,'');
+ if(!cleaned.trim())return undefined;
+ if(cleaned.length>max){const suffix='\n[文本已截断，完整内容请查看原日志]';cleaned=cleaned.slice(0,Math.max(0,max-suffix.length));if(/[\ud800-\udbff]$/.test(cleaned))cleaned=cleaned.slice(0,-1);cleaned+=suffix;}
+ return cleaned;
+}
+
 export function normalizeReusedFrom(value){
  if(value===undefined||value===null)return undefined;
- if(typeof value==='string')value={runId:value};
- if(!object(value)||!identifier(value.runId)||value.stepId!==undefined&&!identifier(value.stepId))throw Error('RUN_REUSE_SOURCE_INVALID');
- return compact({runId:value.runId,stepId:value.stepId});
+ if(typeof value==='string'){
+  const cleaned=diagnosticText(value,4096);if(!cleaned)return undefined;
+  const [target,...notes]=cleaned.split(';'),match=target.trim().match(/^([a-z0-9][a-z0-9_-]{0,79})(?:\/([a-z0-9][a-z0-9_-]{0,79}))?$/i);
+  if(match)return compact({runId:match[1],stepId:match[2],note:diagnosticText(notes.join(';').trim(),2000)});
+  return {label:diagnosticText(cleaned,2000),unresolved:true};
+ }
+ if(object(value)&&identifier(value.runId)&&(value.stepId===undefined||identifier(value.stepId)))return compact({runId:value.runId,stepId:value.stepId,note:diagnosticText(value.note,2000),label:diagnosticText(value.label,2000)});
+ return compact({label:object(value)?diagnosticText(value.label,2000)||diagnosticText(value.runId,2000)||'未结构化的复用来源':'未结构化的复用来源',note:object(value)?diagnosticText(value.note,2000):undefined,unresolved:true});
 }
 export function normalizeSourceCi(value){
  if(value===undefined||value===null)return undefined;if(!object(value))throw Error('RUN_CI_SOURCE_INVALID');
@@ -39,7 +54,7 @@ export function normalizeVersions(value){
 function step(value,{attempt=false,id}={}){
  if(!object(value)||!identifier(value.id??id)||(!attempt||value.status!==undefined)&&!validState(value.status))throw Error('RUN_STEP_INVALID');
  const command=value.command===undefined||value.command===null?[]:typeof value.command==='string'?[text(value.command,'command',65536)]:list(value.command,'command',arg=>{if(typeof arg!=='string')throw Error('RUN_COMMAND_INVALID');return text(arg,'command',32768);},256);
- const result=compact({id:value.id??id,label:text(value.label,'label',1000)||value.id||id,detail:text(value.detail,'detail'),status:value.status,command,tests:normalizeTests(value.tests),activity:text(value.activity,'activity',4000),error:text(value.error,'error',40000),executor:Object.hasOwn(value,'executor')?normalizeHost(value.executor):undefined,controller:Object.hasOwn(value,'controller')?normalizeHost(value.controller):undefined,reusedFrom:normalizeReusedFrom(value.reusedFrom)});
+ const result=compact({id:value.id??id,label:text(value.label,'label',1000)||value.id||id,detail:diagnosticText(value.detail),status:value.status,command,tests:normalizeTests(value.tests),activity:diagnosticText(value.activity,4000),error:diagnosticText(value.error,40000),executor:Object.hasOwn(value,'executor')?normalizeHost(value.executor):undefined,controller:Object.hasOwn(value,'controller')?normalizeHost(value.controller):undefined,reusedFrom:normalizeReusedFrom(value.reusedFrom)});
  for(const key of ['startedAt','finishedAt','activityUpdatedAt','heartbeatAt'])if(value[key]!==undefined)result[key]=date(value[key],key);
  if(value.seconds!==undefined&&value.seconds!==null){if(!Number.isFinite(value.seconds)||value.seconds<0)throw Error('RUN_SECONDS_INVALID');result.seconds=value.seconds;}
  if(value.exitCode!==undefined){if(value.exitCode!==null&&!Number.isSafeInteger(value.exitCode))throw Error('RUN_EXIT_CODE_INVALID');result.exitCode=value.exitCode;}
@@ -54,10 +69,10 @@ export function normalizeRunRecord(record,source,{manifestVersions}={}){
  const versions=own(record,'versions')?normalizeVersions(record.versions):normalizeVersions(manifestVersions);
  const projects=list(record.projects??source.projects,'projects',value=>{if(typeof value!=='string')throw Error('RUN_PROJECTS_INVALID');return text(value,'project',300);},100);
  const taskKey=text(record.taskKey??source.taskKey,'task_key',160)?.trim()||undefined;
- const run=compact({id:source.id,taskKey,format:text(record.format,'format',100),name:text(record.name??source.name,'name',1000)||source.id,projects,environment:text(record.environment??source.environment,'environment',2000)||'WSL Linux',status:validState(record.status)?record.status:undefined,finished:record.finished===true,versions,steps,executor:record.executor===undefined?normalizeHost(source.executor,'configured'):normalizeHost(record.executor),controller:normalizeHost(record.controller),sourceCi:normalizeSourceCi(record.sourceCi),recoveryRefs:record.recoveryRefs===undefined?undefined:normalizeRecoveryRefs(record.recoveryRefs),error:text(record.error,'error',40000)});
+ const run=compact({id:source.id,taskKey,format:text(record.format,'format',100),name:text(record.name??source.name,'name',1000)||source.id,projects,environment:text(record.environment??source.environment,'environment',2000)||'WSL Linux',status:validState(record.status)?record.status:undefined,finished:record.finished===true,versions,steps,executor:record.executor===undefined?normalizeHost(source.executor,'configured'):normalizeHost(record.executor),controller:normalizeHost(record.controller),sourceCi:normalizeSourceCi(record.sourceCi),recoveryRefs:record.recoveryRefs===undefined?undefined:normalizeRecoveryRefs(record.recoveryRefs),error:diagnosticText(record.error,40000)});
  for(const key of ['enqueuedAt','startedAt','updatedAt','heartbeatAt','finishedAt'])if(record[key]!==undefined)run[key]=date(record[key],key);
  const starts=steps.flatMap(entry=>[entry.startedAt,...(entry.attempts||[]).map(item=>item.startedAt)]).filter(Boolean).sort();run.startedAt??=starts[0];
- if(record.queueReason!==undefined){const reason=text(record.queueReason,'queue_reason',4000)?.trim();if(reason)run.queueReason=reason;}
+ if(record.queueReason!==undefined){const reason=diagnosticText(record.queueReason,4000)?.trim();if(reason)run.queueReason=reason;}
  if(record.plannedDeviceId!==undefined){if(!identifier(record.plannedDeviceId))throw Error('RUN_PLANNED_DEVICE_INVALID');run.plannedDeviceId=record.plannedDeviceId;}
  if(record.plannedExecutor!==undefined)run.plannedExecutor=normalizeHost(record.plannedExecutor);
  run.status=aggregateRunStatus(run);
