@@ -9,6 +9,14 @@ function date(value,key){if(value===undefined||value===null||value==='')return u
 function list(value,key,normalize,max=1000){if(value===undefined||value===null)return [];if(!Array.isArray(value)||value.length>max)throw Error('RUN_'+key.toUpperCase()+'_INVALID');return value.map(normalize);}
 const compact=value=>Object.fromEntries(Object.entries(value).filter(([,entry])=>entry!==undefined));
 
+// GitHub owns cloud-only runs. The WSL viewer retains CI provenance on an
+// actual physical-device run, without adding cloud jobs to its task counts.
+export function isCloudOnlyRun(run){
+ const commands=(run.steps||[]).filter(step=>step.command?.length),host=step=>Object.hasOwn(step,'executor')?step.executor:run.executor;
+ if(commands.length)return commands.every(step=>host(step)?.platform==='github-actions');
+ return run.executor?.platform==='github-actions'&&!run.plannedDeviceId&&run.plannedExecutor?.platform!=='linux'&&run.plannedExecutor?.platform!=='win32';
+}
+
 // Diagnostic prose is optional evidence, not a reason to discard an otherwise
 // valid run. Never stringify arbitrary error objects or their private fields.
 export function diagnosticText(value,max=20000){

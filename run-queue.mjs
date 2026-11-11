@@ -25,9 +25,11 @@ export function releaseDevice(reservations,reservation){
 export function validateExecutionReceipt(receipt,binding,exitCode,{terminal=true}={}){
  if(!receipt||receipt.format!==receiptProtocol||receipt.dispatchJobId!==binding.jobId||receipt.attemptId!==binding.attemptId||receipt.deviceId!==binding.deviceId||receipt.inputDigest!==binding.inputDigest)throw Error('EXECUTION_RECEIPT_BINDING_MISMATCH');
  if(typeof receipt.id!=='string'||!/^[a-z0-9][a-z0-9_-]{0,79}$/i.test(receipt.id))throw Error('EXECUTION_RECEIPT_RUN_ID_INVALID');
- const offset=Number.isFinite(binding.clockOffsetMs)&&Math.abs(binding.clockOffsetMs)<=86400000?binding.clockOffsetMs:0;
+ const domain=receipt.clockDomain||'linux';if(!['windows','linux'].includes(domain)||receipt.commandStarted===true&&(domain!=='linux'||binding.preparationOnly))throw Error('EXECUTION_RECEIPT_CLOCK_DOMAIN_INVALID');
+ const offset=binding.sourceClockOffsets?binding.sourceClockOffsets[domain]:binding.clockOffsetMs??0;
+ if(!Number.isFinite(offset)||Math.abs(offset)>86400000)throw Error('EXECUTION_SOURCE_CLOCK_UNCONFIRMED');
  const normalized=value=>timestamp(value)-offset,validWindow=value=>Number.isFinite(value)&&value>=binding.started-timeSlack&&value<=binding.receivedAt+timeSlack;
- const common={format:receiptProtocol,attemptId:binding.attemptId,deviceId:binding.deviceId,inputDigest:binding.inputDigest};
+ const common={format:receiptProtocol,attemptId:binding.attemptId,deviceId:binding.deviceId,inputDigest:binding.inputDigest,clockDomain:domain};
  if(receipt.commandStarted===false){
   if(!terminal||receipt.finished!==true||!['queued','blocked'].includes(receipt.status)||own(receipt,'startedAt')||receipt.admission?.decision!=='wait'||typeof receipt.admission.reason!=='string'||!receipt.admission.reason.trim()||receipt.admission.reason.length>2000||![0,75].includes(exitCode))throw Error('EXECUTION_ADMISSION_RECEIPT_INVALID');
   const reported=normalized(receipt.reportedAt);if(!validWindow(reported))throw Error('EXECUTION_RECEIPT_TIME_INVALID');
@@ -63,7 +65,9 @@ export async function executePreparedJob(job,device,directory,report=async()=>{}
  if(adapter.receiptProtocol!==receiptProtocol)return wait('执行器尚未准备绑定本次尝试的v2回执协议');
  if(typeof job.dispatchLease?.token!=='string'||!job.dispatchLease.token)return wait('本次执行租约尚未准备');
  let digest;try{digest=preparedInputDigest(job.inputs);if(!await verifyInputs(job.inputs))return wait('已准备输入发生变化或过大，等待执行端重新冻结')}catch{return wait('不可变输入摘要或文件尚未准备完成')}
- const binding={jobId:job.id,attemptId:job.dispatchLease.token,deviceId:device.id,inputDigest:digest,clockOffsetMs:device.clockOffsetMs||0};
+ const production=own(device,'onlineState')||own(device,'resources'),preparationOnly=production&&!Number.isFinite(device.linuxClockOffsetMs);
+ if(preparationOnly&&adapter.supportsPreparationOnly!==true)return wait('执行端须先预热WSL并取得新鲜Linux时钟采样；项目命令尚未启动');
+ const binding={jobId:job.id,attemptId:job.dispatchLease.token,deviceId:device.id,inputDigest:digest,preparationOnly,...(production?{sourceClockOffsets:{windows:device.windowsClockOffsetMs,linux:device.linuxClockOffsetMs}}:{clockOffsetMs:0})};
  const started=Date.now(),log=join(directory,'executor.log');try{await appendFile(log,new Date(started).toISOString()+' device='+device.id+'\n')}catch{return wait('执行日志目录不可写，项目命令尚未启动')}
  let logTail=Promise.resolve(),logError,progressError,polling,lastProgress;
  async function pollProgress(){
@@ -74,7 +78,7 @@ export async function executePreparedJob(job,device,directory,report=async()=>{}
  let child,exitCode;const timer=setInterval(poll,1000);
  try{
   exitCode=await new Promise((ok,reject)=>{
-   child=spawn(adapter.file,adapter.args,{windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,WSL_CONSOLE_JOB_ID:binding.jobId,WSL_CONSOLE_ATTEMPT_ID:binding.attemptId,WSL_CONSOLE_DEVICE_ID:binding.deviceId,WSL_CONSOLE_INPUT_DIGEST:binding.inputDigest}});
+   child=spawn(adapter.file,adapter.args,{windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,WSL_CONSOLE_JOB_ID:binding.jobId,WSL_CONSOLE_ATTEMPT_ID:binding.attemptId,WSL_CONSOLE_DEVICE_ID:binding.deviceId,WSL_CONSOLE_INPUT_DIGEST:binding.inputDigest,WSL_CONSOLE_PREPARATION_ONLY:preparationOnly?'1':'0'}});
    for(const stream of [child.stdout,child.stderr])stream.on('data',chunk=>{stream.pause();logTail=logTail.then(async()=>{try{if(!logError)await appendFile(log,chunk)}catch(error){logError=error}finally{stream.resume()}})});
    child.once('error',reject);child.once('close',code=>ok(code));poll();
   });

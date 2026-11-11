@@ -8,7 +8,7 @@ import {failureDetails} from './failure.mjs';
 import {readResources} from './resources.mjs';
 import {captureHost} from './host.mjs';
 import {readDevices} from './devices.mjs';
-import {normalizeRunRecord,identifier} from './model.mjs';
+import {normalizeRunRecord,identifier,isCloudOnlyRun} from './model.mjs';
 import {readAssetSnapshot,runtimeIdentity} from './identity.mjs';
 import {createRecordCache} from './record-cache.mjs';
 
@@ -53,6 +53,7 @@ export async function createViewer(config,{assetsRoot=root}={}){
    let manifestVersions;
    if(record&&typeof record==='object'&&!Object.hasOwn(record,'versions')&&source.manifestFile){const manifest=await cache.read(source.manifestFile);if(!manifest?.repositories||typeof manifest.repositories!=='object'||Array.isArray(manifest.repositories))throw Error('RUN_MANIFEST_INVALID');manifestVersions=Object.entries(manifest.repositories).map(([name,repo])=>{if(!repo||typeof repo!=='object'||Array.isArray(repo))throw Error('RUN_MANIFEST_INVALID');return {name,branch:repo.branch,head:repo.head,sha256:repo.sha256}});}
    const run=normalizeRunRecord(record,source,{manifestVersions});
+   if(isCloudOnlyRun(run))return null;
    if(isExpiredHistory(record,Date.now(),{references,id:source.id,aliases:[record.id],directory:dirname(resolve(source.progressFile))}))return null;
    return run;
   }catch(error){return blocked(source,error)}

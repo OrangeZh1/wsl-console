@@ -24,6 +24,16 @@ test('a bound no-start admission refusal becomes a queued wait, never a false co
  assert.throws(()=>validateExecutionReceipt(blocked,binding,255));
 });
 
+test('Windows offset cannot adjust Linux receipts and preparation cannot report a started command',()=>{
+ const mapped={...binding,sourceClockOffsets:{windows:9000,linux:0}};
+ assert.equal(validateExecutionReceipt(receipt({clockDomain:'linux'}),mapped,0).startedAt,stamp(0));
+ assert.throws(()=>validateExecutionReceipt(receipt(),{...mapped,sourceClockOffsets:{windows:9000}},0),/CLOCK_UNCONFIRMED/);
+ assert.throws(()=>validateExecutionReceipt(receipt({clockDomain:'windows'}),mapped,0),/CLOCK_DOMAIN/);
+ assert.throws(()=>validateExecutionReceipt(receipt(),{...mapped,preparationOnly:true},0),/CLOCK_DOMAIN/);
+ const waiting=receipt({clockDomain:'windows',status:'queued',commandStarted:false,reportedAt:stamp(9500),admission:{decision:'wait',reason:'WSL warmed; await fresh Linux sample'}});delete waiting.startedAt;delete waiting.finishedAt;
+ assert.equal(validateExecutionReceipt(waiting,{...mapped,preparationOnly:true},75).admissionEvidence.reportedAt,stamp(500));
+});
+
 test('bound live progress keeps actual start and advancing heartbeat separate from launch',()=>{
  const live=receipt({status:'running',finished:false,heartbeatAt:stamp(1500)});delete live.finishedAt;
  const progress=validateExecutionReceipt(live,binding,undefined,{terminal:false});assert.equal(progress.status,'running');assert.equal(progress.heartbeatAt,stamp(1500));

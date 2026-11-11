@@ -443,6 +443,8 @@ svg.symbol { display: block; flex: none; width: 16px; height: 16px; margin-top: 
 #log { flex: none; padding: 0 16px 0 10px; }
 .log-empty { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 10px; height: 100%; padding: 20px; color: #8a9cb4; font-size: 12px; line-height: 1.65; text-align: center; }
 .log-empty > span { max-width: 620px; }
+.log-view.pending-log { color: var(--muted); background: var(--subtle); --scrollbar-thumb: #b7c4d5; --scrollbar-hover: #8fa1b9; --scrollbar-track: var(--subtle); }
+.pending-log .log-empty { color: var(--muted); font-size: 13px; }
 .reuse-jump { padding: 4px 8px; border-color: #4e6482; color: #d1e1fa; background: #23344d; font-size: 11px; }
 .reuse-jump:hover:not(:disabled) { background: #304968; }
 .ci-source a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
@@ -481,7 +483,7 @@ svg.symbol { display: block; flex: none; width: 16px; height: 16px; margin-top: 
 }
 
 /* Native task/stage controls keep the mobile log readable without overlays. */
-@media (max-width: 768px) {
+@media (max-width: 768px), (max-width: 1100px) and (pointer: coarse) and (hover: none) {
   :root { --page-gutter: 12px; }
   .topbar { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "brand connection" "tools tools" "devices devices"; gap: 4px 10px; height: auto; flex-basis: auto; padding: 7px var(--page-gutter); }
   .brand { height: 29px; gap: 8px; padding: 0; border: 0; }

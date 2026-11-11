@@ -21,7 +21,7 @@ const preparationSignature=job=>createHash('sha256').update(JSON.stringify({inpu
 function admission(job,device,now){
  if(device.onlineState!=='online'||!fresh(device.checkedAt,now))return {reason:'设备不可达或核验已过期'};
  const data=device.resources;
- if(!data||!fresh(data.sampledAt,now))return {reason:'资源采样缺失或已过期'};
+ if(!data||!fresh(own(data,'normalizedTimes')?data.normalizedTimes?.sampledAt:data.sampledAt,now))return {reason:'资源采样缺失或已过期'};
  if(device.leaseBusy===true||data.lockBusy===true||['executing','unconfirmed'].includes(device.workload))return {reason:'设备已有执行、租约或待确认活动'};
  const host=data.windows?.availableBytes,hostRequired=Math.max(2.5*GiB,job.peakBytes+GiB);
  if(!Number.isSafeInteger(host)||host<hostRequired)return {reason:'Windows 可用内存不足或未核验'};
