@@ -1,0 +1,19 @@
+import net from 'node:net';import {spawn} from 'node:child_process';import {randomUUID,createHash} from 'node:crypto';import {readFile} from 'node:fs/promises';
+export async function connectWindowsBrowser(options={}){
+ if(!options||Object.keys(options).some(key=>!['playwright','timeout','onEvent'].includes(key)))throw Error('UNSUPPORTED_WINDOWS_BROWSER_OPTION: launch options require explicit caller adaptation');
+ const {playwright,timeout=40000,onEvent=()=>{}}=options;
+ if(process.platform!=='linux'||typeof playwright?.chromium?.connect!=='function')throw Error('LINUX_PLAYWRIGHT_REQUIRED');
+ const serverSourceSha256='c05d55c57190c69cef16deb3b0c97dc3295f2f189cb92512e2a14bffd9f7f111';if(createHash('sha256').update(await readFile('/mnt/d/WSL/tools/windows-browser-1.64.1/src/windows-browser-server-chromium.cjs')).digest('hex')!==serverSourceSha256)throw Error('WINDOWS_BROWSER_SOURCE_CHANGED');
+ const id='pw-'+randomUUID(),windowsRoot='/mnt/d/WSL/tools/windows-browser-1.64.1',child=spawn(windowsRoot+'/node-v24.18.0-win-x64/node.exe',['--max-old-space-size=512','D:/WSL/tools/windows-browser-1.64.1/src/windows-browser-server-chromium.cjs','D:/WSL/state/browser-sessions/'+id],{stdio:['pipe','pipe','pipe'],env:{...process.env,WSLENV:'',NODE_OPTIONS:'--max-old-space-size=512'}});
+ let buffer='',browser,server,connection,closed=false,exitCode,resolveExit;const exited=new Promise(ok=>resolveExit=ok);child.once('close',code=>{exitCode=code;resolveExit(code)});child.stdin.on('error',()=>{});child.once('error',error=>onEvent({kind:'interop-start-error',error:String(error)}));
+ async function close(){if(closed)return;closed=true;try{if(browser)await browser.close()}finally{connection?.destroy();child.stdin.end();if(server)await new Promise(ok=>server.close(ok));let timer;try{await Promise.race([exited,new Promise((_,bad)=>timer=setTimeout(()=>bad(Error('OWNED_WINDOWS_BROWSER_CLOSE_TIMEOUT')),12000))])}finally{clearTimeout(timer)}}return {exitCode}};
+ let timer;
+ try{
+  const ready=await new Promise((ok,bad)=>{timer=setTimeout(()=>bad(Error('WINDOWS_BROWSER_READY_TIMEOUT')),timeout);child.once('error',bad);child.once('close',code=>bad(Error('WINDOWS_BROWSER_EXIT_BEFORE_READY '+code)));child.stderr.on('data',bytes=>{buffer+=bytes.toString('utf8');for(;;){const at=buffer.indexOf('\n');if(at<0)break;const line=buffer.slice(0,at).trim();buffer=buffer.slice(at+1);if(!line)continue;try{const value=JSON.parse(line);onEvent(value);if(value.kind==='windows-browser-ready')ok(value);if(value.kind==='windows-browser-error')bad(Error(value.error))}catch(error){if(line.startsWith('{'))bad(error);else onEvent({kind:'windows-stderr',text:line.slice(0,2000)})}}})});clearTimeout(timer);
+  const remote=new URL(ready.endpoint);if(remote.protocol!=='ws:'||remote.hostname!=='127.0.0.1'||ready.playwrightVersion!=='1.64.1')throw Error('WINDOWS_BROWSER_READY_INVALID');
+  server=net.createServer(socket=>{if(connection){socket.destroy();return}connection=socket;socket.pipe(child.stdin);child.stdout.pipe(socket);socket.once('error',()=>{});socket.once('close',()=>child.stdin.end())});await new Promise((ok,bad)=>{server.once('error',bad);server.listen(0,'127.0.0.1',ok)});
+  const address=server.address(),wsEndpoint='ws://127.0.0.1:'+address.port+remote.pathname;
+  browser=await playwright.chromium.connect(wsEndpoint,{timeout,exposeNetwork:'<loopback>'});
+  return {browser,close,receipt:{id,interopPid:child.pid,windowsPid:ready.pid,windowsBrowserPid:ready.browserPid,linuxProxyPort:address.port,windowsServerPort:Number(remote.port),windowsSession:ready.session,playwrightVersion:ready.playwrightVersion,browserVersion:browser.version(),channel:ready.channel,loopbackOnly:true}};
+ }catch(error){clearTimeout(timer);try{await close()}catch(closeError){error.closeError=String(closeError)}throw error}
+}
